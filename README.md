@@ -1,1 +1,3 @@
 # Biodiversity-Tool-2026
+This tool was developed by Shaymaa Yousef S. Hammash, a Bio-engineer and Master's Student at Ghent University (2024-2026). For any questions or feedback, you can reach out via email at shaymapal@gmail.com. 
+The tool is based on the UK Biodiversity Metric by DEFRA and is distributed under the Open Government Licence (OGL v3.0), which can be found at https://www.nationalarchives.gov.uk/doc/open-government-licence/version/3/. Developer notes: this tool was created to assist campus planners at Ghent University in evaluating the impact of new construction on biodiversity levels on campus, as well as to assess the added biodiversity value of new habitats.
