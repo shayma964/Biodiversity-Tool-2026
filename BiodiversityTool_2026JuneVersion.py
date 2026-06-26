@@ -2,11 +2,24 @@
 """
 Created on Fri May 29 16:12:36 2026
 @author: Gebruiker
+
+This application supports biodiversity impact assessment by:
+  1. Configuring runtime and spatial library paths for bundled and
+     development environments.
+  2. Loading habitat and year lookup tables used in score calculations.
+  3. Converting planned development CAD drawings (DXF) into geospatial
+     polygons and validating their alignment with baseline habitat maps.
+  4. Computing biodiversity loss from the overlap between baseline
+     habitat polygons and planned development footprints.
+  5. Rendering results in a static embedded map, exporting interactive
+     Folium maps, and saving results to shapefiles / CSV files.
+  6. Managing an interactive GUI for loss, gain, baseline comparison,
+     and saved result workflows.
 """
 
 import os
 import sys
-os.environ["MPLBACKEND"] = "Agg"  # MUST be before any other import
+os.environ["MPLBACKEND"] = "Agg"  
 
 import shutil
 import csv
@@ -36,6 +49,16 @@ from pyproj import CRS
 
 # -------------------- Configuration & Paths --------------------
 def get_base_dir():
+    """Return the base directory for the running application.
+
+    The function supports both normal Python execution and frozen
+    executable builds created by tools like PyInstaller or cx_Freeze.
+    In the frozen case, resources are located relative to the executable;
+    otherwise, they are located relative to the source file.
+
+    Returns:
+        pathlib.Path: The path to the application base directory.
+    """
     if getattr(sys, "frozen", False):
         return Path(sys.executable).parent
     return Path(__file__).parent
@@ -70,6 +93,16 @@ REQUIRED_BASE_COLS  = [COL_PARCEL, COL_BROAD, COL_HABITAT, COL_AREA, COL_CONDITI
 
 # -------------------- Path helpers (call BEFORE matplotlib) --------------------
 def configure_proj_paths():
+    """Set environment variables required by PROJ and pyproj.
+
+    This is necessary because when the app is bundled as a self-contained
+    executable, the PROJ library data is not found in the normal system
+    locations. The function sets PROJ_LIB and updates PATH so spatial
+    reprojections work reliably across platforms.
+
+    Returns:
+        None
+    """
     if getattr(sys, 'frozen', False):
         base = Path(sys.executable).parent
         os.environ["PROJ_LIB"] = str(base / "lib" / "share" / "proj")
@@ -80,6 +113,16 @@ def configure_proj_paths():
         os.environ["PATH"]     = str(env_path / "Library" / "bin") + os.pathsep + os.environ["PATH"]
 
 def configure_mpl_paths():
+    """Set Matplotlib runtime data paths for frozen application bundles.
+
+    When a GUI application is packaged, Matplotlib cannot locate its data
+    directory automatically. This helper assigns MATPLOTLIBDATA to the
+    bundled mpl-data folder and directs Matplotlib to use a local cache
+    directory for configuration files.
+
+    Returns:
+        None
+    """
     if getattr(sys, 'frozen', False):
         base = Path(sys.executable).parent
         mpl_data = base / "lib" / "matplotlib" / "mpl-data"
@@ -143,6 +186,22 @@ class LogoManager:
 
 # -------------------- Geospatial helpers --------------------
 def force_polygon(geom):
+    """Convert linear geometry into a valid polygon when possible.
+
+    Many input files contain line-based features instead of closed polygons.
+    This helper attempts to close line strings and convert them into
+    Polygon or MultiPolygon geometries so they can participate in area- and
+    overlay-based biodiversity calculations.
+
+    Parameters:
+        geom: shapely geometry
+            The geometry to normalize.
+
+    Returns:
+        shapely geometry or None:
+            A polygonal geometry if conversion succeeded; otherwise the original
+            geometry or None for empty inputs.
+    """
     if geom is None or geom.is_empty:
         return None
     try:
@@ -176,7 +235,26 @@ def force_polygon(geom):
         print(f"Warning force_polygon: {e}")
     return geom
 
+
 def load_and_fix(path):
+    """Load a vector file into GeoDataFrame and clean invalid geometries.
+
+    The function reads the input path with GeoPandas, filters out empty
+    geometries, and applies a sequence of fixes to recover invalid geometry
+    objects. This is important because overlay operations are sensitive to
+    invalid or empty shapes.
+
+    Parameters:
+        path: str or pathlib.Path
+            Path to the input vector file.
+
+    Returns:
+        geopandas.GeoDataFrame:
+            A cleaned GeoDataFrame containing valid, non-empty geometries.
+
+    Raises:
+        RuntimeError: If no valid geometries remain after cleaning.
+    """
     gdf = gpd.read_file(path)
     gdf = gdf[gdf.geometry.notna() & ~gdf.geometry.is_empty]
     if gdf.empty:
@@ -199,8 +277,27 @@ def load_and_fix(path):
     return gdf
 
 def convert_dxf_layers(input_path, output_shp, target_crs=None):
-    """Convert DXF to Shapefile. Handles LWPOLYLINE, POLYLINE, HATCH, CIRCLE."""
-   
+    """Convert a DXF input file into a single polygon shapefile.
+
+    This helper parses common DXF entity types used for development footprints
+    and creates a simplified GeoDataFrame. It also preserves or assigns CRS
+    information when available, then writes the result to a shapefile.
+
+    Parameters:
+        input_path: str or pathlib.Path
+            Source DXF file path.
+        output_shp: str or pathlib.Path
+            Destination shapefile path used to store extracted geometry.
+        target_crs: pyproj.CRS or dict or None
+            Optional CRS to assign or reproject the converted geometry to.
+
+    Returns:
+        pathlib.Path:
+            The output shapefile path on success.
+
+    Raises:
+        RuntimeError: If conversion fails or no valid geometries are found.
+    """
     try:
         doc = ezdxf.readfile(input_path)
         msp = doc.modelspace()
@@ -321,6 +418,27 @@ def convert_dxf_layers(input_path, output_shp, target_crs=None):
         raise RuntimeError(f"DXF conversion failed: {e}")
 
 def convert_if_needed(input_path, is_baseline=False, target_crs=None):
+    """Convert input file to a supported geospatial format when required.
+
+    Baseline files are expected to already be vector files in shapefile or
+    GeoPackage format. Planned development files may be DXF or shapefile.
+    If a DXF is provided, it is converted to shapefile via convert_dxf_layers.
+
+    Parameters:
+        input_path: str or pathlib.Path
+            Path to input file.
+        is_baseline: bool
+            Whether the file is the baseline dataset.
+        target_crs: pyproj.CRS or dict or None
+            Target CRS for DXF conversion, if needed.
+
+    Returns:
+        str or pathlib.Path:
+            The input path or generated shapefile path.
+
+    Raises:
+        RuntimeError: If the file extension is unsupported for the context.
+    """
     ext = os.path.splitext(input_path)[1].lower()
     if is_baseline:
         if ext in (".shp", ".gpkg"):
@@ -339,26 +457,26 @@ def validate_dxf_position(
     baseline_gdf,
     planned_gdf,
     source_file=None,
-    
 ):
-    """
-    Validate that a DXF-derived planned development layer is
-    spatially aligned with the baseline layer.
+    """Check whether the planned DXF overlay is plausibly aligned with baseline data.
 
-    Parameters
-    ----------
-    baseline_gdf : GeoDataFrame
-    planned_gdf : GeoDataFrame
-    source_file : str | None
-        Original input file path.
-    warn_distance : float
-        Distance threshold (m) above which a warning is shown.
+    This function measures the minimum separation between the baseline and
+    planned geometries, compares bounding boxes and centroid offsets, and
+    alerts the user when the two datasets do not appear to share the same
+    spatial location. The main goal is to catch DXF files that are in a local
+    CAD coordinate system or lack georeferencing.
 
-    Returns
-    -------
-    bool
-        True if alignment appears valid.
-        False if a potential positioning issue was detected.
+    Parameters:
+        baseline_gdf: geopandas.GeoDataFrame
+            Baseline habitat layer.
+        planned_gdf: geopandas.GeoDataFrame
+            Planned development layer extracted from DXF.
+        source_file: str or None
+            Optional original source path used for messaging.
+
+    Returns:
+        bool:
+            True if the planned layer appears aligned; False otherwise.
     """
     warn_distance = max(
     baseline_gdf.total_bounds[2] - baseline_gdf.total_bounds[0],
@@ -417,44 +535,53 @@ def validate_dxf_position(
 
 
 def handle_planned_development(planned_path, baseline_gdf):
-    """Handle planned development (SHP or DXF) - load, reproject, and fix alignment if needed."""
-    
+    """Load planned development data and ensure it matches the baseline CRS.
+
+    DXF inputs require extraction to polygon geometry and may have a different
+    coordinate system than the baseline dataset. This function converts DXF
+    files when needed, cleans geometries, reprojects to the baseline CRS, and
+    validates that the resulting layer is spatially aligned.
+
+    Parameters:
+        planned_path: str or pathlib.Path
+            Path to the planned development file.
+        baseline_gdf: geopandas.GeoDataFrame
+            Baseline layer used to determine target CRS and alignment.
+
+    Returns:
+        geopandas.GeoDataFrame:
+            The cleaned planned development layer in the baseline CRS.
+
+    Raises:
+        RuntimeError: If DXF conversion fails, alignment is invalid, or file type is unsupported.
+    """
     is_dxf = planned_path.lower().endswith(".dxf")
     
-    # Load file
     if is_dxf:
-        # CHANGED: No user prompt needed. Pass baseline_gdf.crs directly.
-        # The converter handles extraction and reprojection automatically.
         shp_path = planned_path.replace('.dxf', '_conv.shp')
-        
-        # CHANGED: Parameter renamed from crs_epsg to target_crs to match updated helper
         convert_dxf_layers(planned_path, shp_path, target_crs=baseline_gdf.crs)
         planned_gdf = load_and_fix(shp_path)
     else:
         planned_gdf = load_and_fix(planned_path)
     
-    # Reproject Shapefiles if their native CRS doesn't match baseline
-    # (DXF is already handled during conversion, but this acts as a safe catch-all)
     if (
-    planned_gdf.crs is not None
-    and baseline_gdf.crs is not None
-    and not CRS(planned_gdf.crs).equals(CRS(baseline_gdf.crs))
+        planned_gdf.crs is not None
+        and baseline_gdf.crs is not None
+        and not CRS(planned_gdf.crs).equals(CRS(baseline_gdf.crs))
     ):
-       planned_gdf = planned_gdf.to_crs(baseline_gdf.crs)
+        planned_gdf = planned_gdf.to_crs(baseline_gdf.crs)
     
-    # Fix alignment for DXF only (will safely exit if already georeferenced)
     if is_dxf:
         valid = validate_dxf_position(
-        baseline_gdf=baseline_gdf,
-        planned_gdf=planned_gdf,
-        source_file=planned_path
-    )
-
-        if not valid:
-          raise RuntimeError(
-            "DXF appears misaligned with baseline. "
-            "Please verify in QGIS or AutoCAD."
+            baseline_gdf=baseline_gdf,
+            planned_gdf=planned_gdf,
+            source_file=planned_path
         )
+        if not valid:
+            raise RuntimeError(
+                "DXF appears misaligned with baseline. "
+                "Please verify in QGIS or AutoCAD."
+            )
     return planned_gdf
 def _safe_union(gdf):
     try:
