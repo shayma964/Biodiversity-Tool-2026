@@ -47,7 +47,7 @@ from shapely.affinity import translate
 import ezdxf
 from pyproj import CRS
 
-# -------------------- Configuration & Paths --------------------
+                                                                 
 def get_base_dir():
     """Return the base directory for the running application.
 
@@ -80,7 +80,7 @@ SPATIAL_MAPPING     = {"On-site": 1.0, "Within same city": 0.75, "Somewhere furt
 STRATEGIC_MAPPING   = {"High": 1.15, "Medium": 1.1, "Low": 1.0}
 DISTINCTIVENESS_MAP = {"V.High": 8, "High": 6, "Medium": 4, "Low": 2, "V.Low": 0}
 
-# ── Expected column names — change here if your files use different names ──
+                                                                             
 COL_BROAD     = "Baseline Broad Habitat Type"
 COL_CONDITION = "Baseline Condition"
 COL_DISTINCT  = "Baseline Distinctiveness"
@@ -91,7 +91,7 @@ COL_AREA      = "Area"
 REQUIRED_LOSS_COLS  = [COL_BROAD, COL_CONDITION, COL_DISTINCT]
 REQUIRED_BASE_COLS  = [COL_PARCEL, COL_BROAD, COL_HABITAT, COL_AREA, COL_CONDITION, COL_STRATEGIC]
 
-# -------------------- Path helpers (call BEFORE matplotlib) --------------------
+                                                                                 
 def configure_proj_paths():
     """Set environment variables required by PROJ and pyproj.
 
@@ -135,7 +135,7 @@ def configure_mpl_paths():
 configure_proj_paths()
 configure_mpl_paths()
 
-# -------------------- Matplotlib (after path config) --------------------
+                                                                          
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -143,31 +143,69 @@ import matplotlib.patches as mpatches
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 import matplotlib.colors as mcolors
 
-# -------------------- Folium (after path config) --------------------
+                                                                      
 import folium
 import tempfile
 
-# -------------------------------------------------------------------------
+                                                                           
 class AutocompleteCombobox(ttk.Combobox):
+    """A combobox that filters its suggestions as the user types."""
+
     def set_completion_list(self, completion_list):
+        """Populate the combobox with a sorted list of suggestions.
+
+        Args:
+            completion_list (Iterable[str]): Candidate values to show.
+
+        Returns:
+            None
+        """
         self._completion_list = sorted(completion_list, key=str.lower)
         self["values"] = self._completion_list
         self.bind("<KeyRelease>", self._filter_list)
 
     def _filter_list(self, event):
+        """Filter the visible suggestions based on the current input.
+
+        Args:
+            event: Tk event object for the key release.
+
+        Returns:
+            None
+        """
         typed = self.get().lower()
         if typed == "":
             self["values"] = self._completion_list
             return
         self["values"] = [i for i in self._completion_list if typed in i.lower()]
 
-# -------------------- Logo Manager --------------------
+                                                        
 class LogoManager:
+    """A lightweight image cache for GUI logos and branding assets."""
+
     def __init__(self, logos_dir: Path):
+        """Initialize the logo manager with a directory to search for images.
+
+        Args:
+            logos_dir (pathlib.Path): Directory containing image assets.
+
+        Returns:
+            None
+        """
         self.logos_dir = logos_dir
         self.cache = {}
 
     def load(self, name: str, max_w=160, max_h=80):
+        """Load and cache a logo image from disk.
+
+        Args:
+            name (str): Base file name of the logo without extension.
+            max_w (int): Maximum width for the thumbnail.
+            max_h (int): Maximum height for the thumbnail.
+
+        Returns:
+            PIL.ImageTk.PhotoImage | None: The loaded image, or None if no file exists.
+        """
         if name in self.cache:
             return self.cache[name]
         for e in [".png", ".jpg", ".jpeg", ".gif", ".ico"]:
@@ -184,7 +222,7 @@ class LogoManager:
         self.cache[name] = None
         return None
 
-# -------------------- Geospatial helpers --------------------
+                                                              
 def force_polygon(geom):
     """Convert linear geometry into a valid polygon when possible.
 
@@ -315,7 +353,7 @@ def convert_dxf_layers(input_path, output_shp, target_crs=None):
                 continue
             dtype = entity.dxftype()
 
-            # Polylines (most common)
+                                     
             if dtype in ["LWPOLYLINE", "POLYLINE"]:
                 points = []
                 if dtype == "LWPOLYLINE":
@@ -333,7 +371,7 @@ def convert_dxf_layers(input_path, output_shp, target_crs=None):
                     if poly.is_valid and not poly.is_empty:
                         all_geometries.append(poly)
 
-            # Hatch (filled areas — common for planned footprints)
+                                                                  
             elif dtype == "HATCH":
                 try:
                     for path in entity.paths:
@@ -355,7 +393,7 @@ def convert_dxf_layers(input_path, output_shp, target_crs=None):
                 except Exception:
                     pass
 
-            # Circle
+                    
             elif dtype == "CIRCLE":
                 try:
                     cx = entity.dxf.center.x
@@ -375,24 +413,24 @@ def convert_dxf_layers(input_path, output_shp, target_crs=None):
                 "Supported entity types: LWPOLYLINE, POLYLINE, HATCH, CIRCLE.\n"
                 "Make sure your CAD file uses one of these for the development footprint.")
 
-        # Normalize orientation — DXF polylines are often clockwise which causes
-        # shapely to treat the exterior as interior, flipping the intersection.
-        # orient() forces counter-clockwise exterior ring (shapely convention).
+                                                                                
+                                                                               
+                                                                               
         
         normalized = []
         for geom in all_geometries:
             try:
-                # buffer(0) fixes self-intersections, orient fixes winding order
+                                                                                
                 geom = geom.buffer(0)
                 
-                # shapely.geometry.polygon.orient forces CCW exterior
+                                                                     
                 if hasattr(shapely.geometry.polygon, "orient"):
                     geom = shapely.geometry.polygon.orient(geom, sign=1.0)
                 normalized.append(geom)
             except Exception:
                 normalized.append(geom)
 
-        # Dissolve all geometries into one footprint to avoid duplicate intersections
+                                                                                     
         if len(normalized) > 1:
             merged = unary_union(normalized)
             if merged.is_valid:
@@ -400,15 +438,15 @@ def convert_dxf_layers(input_path, output_shp, target_crs=None):
 
         gdf = gpd.GeoDataFrame(geometry=normalized)
         if dxf_native_epsg:
-            # 1. First assign the native CRS found inside the CAD drawing metadata
+                                                                                  
             gdf = gdf.set_crs(epsg=dxf_native_epsg)
             
-            # 2. Safely reproject the dataset to match your baseline target map projection
+                                                                                          
             if target_crs and (gdf.crs != target_crs):
                 print(f"🔄 Automatically reprojecting DXF from EPSG:{dxf_native_epsg} to match baseline.")
                 gdf = gdf.to_crs(target_crs)
         else:
-            # Fallback label assignment if the drawing lacks georeferencing tags
+                                                                                
             if target_crs:
                 gdf = gdf.set_crs(target_crs)
         
@@ -451,7 +489,7 @@ def convert_if_needed(input_path, is_baseline=False, target_crs=None):
         if ext == ".shp":
             return input_path
         raise RuntimeError("Planned development must be .shp or .dxf")
-# After loading gdf1 and gdf2, add this:
+                                        
 
 def validate_dxf_position(
     baseline_gdf,
@@ -490,7 +528,7 @@ def validate_dxf_position(
 
     distance = base_union.distance(plan_union)
 
-    # perfectly fine
+                    
     if distance <= warn_distance:
         return True
 
@@ -584,13 +622,31 @@ def handle_planned_development(planned_path, baseline_gdf):
             )
     return planned_gdf
 def _safe_union(gdf):
+    """Return the union of all geometries in a GeoDataFrame.
+
+    Args:
+        gdf: GeoDataFrame or GeoSeries containing spatial geometries.
+
+    Returns:
+        shapely geometry: The combined geometry for all features.
+    """
     try:
         return gdf.geometry.union_all()
     except AttributeError:
         return gdf.geometry.unary_union
-# -------------------- App Class --------------------
+                                                     
 class BiodiversityApp:
+    """Main Tkinter application for biodiversity loss and gain calculations."""
+
     def __init__(self, root):
+        """Initialize the GUI, load reference data, and build the interface.
+
+        Args:
+            root: Tk root window that hosts the application.
+
+        Returns:
+            None
+        """
         self.root = root
         self.root.title("Biodiversity Tool")
         self.root.geometry("1200x800")
@@ -638,9 +694,17 @@ class BiodiversityApp:
 
         self._build_ui()
 
-    # -------------------- Column & Habitat mapping dialogs --------------------
+                                                                                
     def _show_column_mapping_dialog(self, available_cols, required_cols):
-        """Modal dialog: let user map their column names to the expected ones."""
+        """Show a modal dialog to map imported columns to the expected schema.
+
+        Args:
+            available_cols (Iterable[str]): Columns present in the uploaded data.
+            required_cols (Iterable[str]): Columns the application needs.
+
+        Returns:
+            dict: Mapping from required column names to user-selected source columns.
+        """
         dialog = tk.Toplevel(self.root)
         dialog.title("Map Column Names")
         dialog.geometry("560x380")
@@ -683,7 +747,15 @@ class BiodiversityApp:
         return result
 
     def _show_habitat_mapping_dialog(self, unknown_habitats, known_habitats):
-        """Modal dialog: map unrecognised / foreign-language habitat names to known ones."""
+        """Show a dialog for translating unknown habitat labels into known ones.
+
+        Args:
+            unknown_habitats (Iterable[str]): Habitat names that were not matched.
+            known_habitats (Iterable[str]): Habitat names already recognized by the tool.
+
+        Returns:
+            dict: Mapping from unknown habitat names to the selected known names.
+        """
         if not unknown_habitats:
             return {}
 
@@ -736,14 +808,30 @@ class BiodiversityApp:
 
    
 
-    # -------------------- Help menu --------------------
+                                                         
     def _open_url(self, url: str):
+        """Open an external URL in the default browser.
+
+        Args:
+            url (str): URL to display.
+
+        Returns:
+            None
+        """
         try:
             webbrowser.open(url)
         except Exception as e:
             messagebox.showerror("Open URL failed", f"Could not open URL:\n{url}\n\n{e}")
 
     def _open_local_pdf(self, pdf_path: Path):
+        """Open a bundled PDF manual from the local filesystem.
+
+        Args:
+            pdf_path (pathlib.Path): Path to the manual inside the project.
+
+        Returns:
+            None
+        """
         if getattr(sys, "frozen", False):
             base_dir      = Path(sys.executable).parent
             corrected_path = base_dir / "manuals" / pdf_path.name
@@ -767,6 +855,7 @@ class BiodiversityApp:
                 messagebox.showerror("Error", f"Could not open manual:\n{corrected_path}")
 
     def _show_about_window(self):
+        """Display an informational window about the application and its authorship."""
         about = tk.Toplevel(self.root)
         about.title("About This Tool")
         about.geometry("620x420")
@@ -795,8 +884,13 @@ class BiodiversityApp:
         txt.pack(expand=True, fill="both")
         ttk.Button(about, text="Close", command=about.destroy).pack(pady=10)
 
-    # -------------------- Data loading --------------------
+                                                            
     def _load_habitats(self):
+        """Load the habitat reference table used to score biodiversity values.
+
+        Returns:
+            pandas.DataFrame: Habitat lookup data with distinctiveness scores added.
+        """
         if HABITATS_CSV.exists():
             try:
                 df = pd.read_csv(HABITATS_CSV, dtype=str).fillna("")
@@ -818,6 +912,11 @@ class BiodiversityApp:
         return sample
 
     def _load_years(self):
+        """Load the year multipliers used in gain calculations.
+
+        Returns:
+            pandas.DataFrame: Reference table with year values and multipliers.
+        """
         if YEARS_CSV.exists():
             try:
                 df = pd.read_csv(YEARS_CSV, dtype=str).fillna("")
@@ -827,13 +926,14 @@ class BiodiversityApp:
                 print("Reading years failed:", e)
         return pd.DataFrame([{"Years": "5", "Multiplier": 1.05}, {"Years": "10", "Multiplier": 1.0}])
 
-    # -------------------- UI build --------------------
+                                                        
     def _build_ui(self):
+        """Construct the main notebook-based user interface and its tabs."""
         style = ttk.Style()
         style.configure("TNotebook",    background=MAIN_BG)
         style.configure("Card.TFrame",  background=MAIN_BG)
 
-        # ── Menu bar ──────────────────────────────────────────────────
+                                                                        
         menubar   = tk.Menu(self.root)
         help_menu = tk.Menu(menubar, tearoff=0)
         help_menu.add_command(label="📘 Manual (English)",
@@ -852,7 +952,7 @@ class BiodiversityApp:
         menubar.add_cascade(label="Help", menu=help_menu)
         self.root.config(menu=menubar)
 
-        # ── Notebook (fills all space) ────────────────────────────────
+                                                                        
         self.notebook = ttk.Notebook(self.root)
         self.notebook.pack(fill="both", expand=True, padx=10, pady=(4, 6))
 
@@ -870,12 +970,13 @@ class BiodiversityApp:
         self._build_baseline_tab()
         self._build_saved_tab()
 
-    # -------------------- Loss Tab --------------------
+                                                        
     def _build_loss_tab(self):
+        """Create the loss-calculation tab with input controls, results, and map view."""
         pane = tk.PanedWindow(self.tab_loss, orient="horizontal", bg=MAIN_BG, sashwidth=6)
         pane.pack(fill="both", expand=True, padx=8, pady=8)
 
-        # ── Left panel ───────────────────────────────────────────────
+                                                                       
         left = ttk.Frame(pane)
         pane.add(left, minsize=420)
 
@@ -927,9 +1028,9 @@ class BiodiversityApp:
         sb.pack(side="right", fill="y")
         self.loss_results_text.configure(yscrollcommand=sb.set)
 
-        # ── Right panel (map) — use grid for precise row control ────────
+                                                                          
         right = ttk.Frame(pane)
-        right.grid_rowconfigure(1, weight=1)    # only canvas row expands
+        right.grid_rowconfigure(1, weight=1)                             
         right.grid_columnconfigure(0, weight=1)
         pane.add(right, minsize=580)
 
@@ -938,7 +1039,7 @@ class BiodiversityApp:
         ttk.Label(map_header, text="Map View", font=("Segoe UI", 12, "bold")).pack(side="left")
 
         self.map_fig, self.map_ax = plt.subplots(figsize=(9,8))
-        self.map_fig.subplots_adjust(right=0.72)   # reserve space for outside legend
+        self.map_fig.subplots_adjust(right=0.72)                                     
         self.map_ax.set_facecolor("#e8f4f0")
         self.map_ax.set_title("Run calculation to display map", fontsize=10, color="#555")
         self.map_ax.axis("off")
@@ -949,7 +1050,7 @@ class BiodiversityApp:
         widget = self.map_canvas.get_tk_widget()
         widget.grid(row=1, column=0, sticky="nsew", padx=6, pady=4)
 
-        # Resize: set figure size in pixels directly, bypassing DPI confusion
+                                                                             
         def _on_map_resize(event):
             if event.width > 50 and event.height > 50:
                 dpi = self.map_fig.dpi
@@ -958,17 +1059,17 @@ class BiodiversityApp:
                 self.map_canvas.draw_idle()
         widget.bind("<Configure>", _on_map_resize)
 
-        # Row 2: toolbar
+                        
         self.map_toolbar = NavigationToolbar2Tk(self.map_canvas, toolbar_frame)
         self.map_toolbar.update()
 
-        # Row 3: separator
+                          
         ttk.Separator(right, orient="horizontal").grid(row=3, column=0, sticky="ew", padx=8, pady=(4, 0))
 
-        # Row 4: logos — fixed height, never squeezed
+                                                     
         logo_inner = tk.Frame(right, bg=MAIN_BG, height=70)
         logo_inner.grid(row=4, column=0, sticky="ew", padx=8, pady=(2, 6))
-        logo_inner.grid_propagate(False)   # enforce fixed height
+        logo_inner.grid_propagate(False)                         
 
         def _load_logo(parent, stem, side):
             for ext in [".png", ".jpg", ".jpeg", ".gif", ".ico"]:
@@ -992,11 +1093,25 @@ class BiodiversityApp:
         _load_logo(logo_inner, "office",     "right")
 
     def _browse_file(self, var: tk.StringVar, filetypes):
+        """Open a file selection dialog and store the chosen path.
+
+        Args:
+            var (tk.StringVar): Widget variable that should receive the selected path.
+            filetypes (list[tuple[str, str]]): File filter definitions for the dialog.
+
+        Returns:
+            None
+        """
         fn = filedialog.askopenfilename(filetypes=filetypes)
         if fn:
             var.set(fn)
 
     def _process_and_export_loss(self):
+        """Run the loss workflow from input files to map and export results.
+
+        Returns:
+            None
+        """
         base = self.loss_baseline_path.get().strip()
         plan = self.loss_planned_path.get().strip()
         sig  = self.loss_significance.get().strip()
@@ -1011,19 +1126,19 @@ class BiodiversityApp:
             return
 
         try:
-            # Load baseline first so its CRS is available for reference
+                                                                       
             shp1 = convert_if_needed(base, is_baseline=True)
             gdf1 = load_and_fix(shp1)
 
-            # CHANGED: Replaced the manual popup/conversion block with your automated helper.
-            # This extracts MAPCSASSIGN variables and reprojects automatically.
+                                                                                             
+                                                                               
             gdf2 = handle_planned_development(plan, gdf1)
 
             print("\n===== DXF DEBUG =====")
             print("DXF CRS:", gdf2.crs)
             print("DXF Bounds:", gdf2.total_bounds)
 
-            # ── Column mapping for baseline shapefile ──────────────────
+                                                                         
             missing_cols = [c for c in REQUIRED_LOSS_COLS if c not in gdf1.columns]
             if missing_cols:
                 col_map = self._show_column_mapping_dialog(
@@ -1081,7 +1196,7 @@ class BiodiversityApp:
                 pd.Series([np.nan]*len(gdf1))).apply(flexible_distinct_map)
             gdf1["Significance score"]    = sig_val
 
-            # Urban exclusion checkbox (exclude only if column present)
+                                                                       
             if COL_BROAD in gdf1.columns:
                 gdf1 = gdf1[gdf1[COL_BROAD].astype(str).str.strip().str.lower() != "urban"]
 
@@ -1102,8 +1217,8 @@ class BiodiversityApp:
             intersection = gpd.overlay(gdf1, gdf2, how="intersection", keep_geom_type=True)
             intersection = intersection[intersection.geometry.type.isin(["Polygon", "MultiPolygon"])]
             if intersection.empty:
-                # Show diagnostic bounds so user can see why there is no overlap
-                b = gdf1.total_bounds  # [minx, miny, maxx, maxy]
+                                                                                
+                b = gdf1.total_bounds                            
                 p = gdf2.total_bounds
                 messagebox.showerror("No overlap",
                     f"No overlap found between baseline and planned development.\n\n"
@@ -1154,14 +1269,14 @@ class BiodiversityApp:
                 f"Total biodiversity units (loss): {total_biodiv:,.3f}",
             ] + summary_lines
 
-            self._last_loss_units = total_biodiv  # store for comparison tab
+            self._last_loss_units = total_biodiv                            
             self.loss_results_text.delete("1.0", "end")
             self.loss_results_text.insert("end", "\n".join(lines))
 
-            # Draw the embedded static map (only this — no auto-popup or auto-export)
+                                                                                     
             self._draw_static_map(gdf1, gdf2, intersection)
 
-            # Ask to save shapefile and CSV
+                                           
             if messagebox.askyesno("Save results", "Save intersection shapefile and CSV of results?"):
                 shp_path = filedialog.asksaveasfilename(defaultextension=".shp",
                     filetypes=[("Shapefile", "*.shp")], title="Save intersection shapefile")
@@ -1186,9 +1301,18 @@ class BiodiversityApp:
         except Exception as ex:
             messagebox.showerror("Processing Error", f"An unexpected error occurred:\n{str(ex)}")
 
-    # -------------------- Static map --------------------
+                                                          
     def _draw_static_map(self, gdf1, gdf2, intersection):
-        """Render result map in the embedded matplotlib panel."""
+        """Render a static map of baseline, planned development, and loss areas.
+
+        Args:
+            gdf1: Baseline habitat GeoDataFrame.
+            gdf2: Planned development GeoDataFrame.
+            intersection: GeoDataFrame containing the overlap between baseline and development.
+
+        Returns:
+            None
+        """
         self._map_gdf1         = gdf1
         self._map_gdf2         = gdf2
         self._map_intersection = intersection
@@ -1196,10 +1320,10 @@ class BiodiversityApp:
         self.map_ax.clear()
         self.map_ax.set_facecolor("#eaf2ea")
 
-        # alias — defined ONCE here, used everywhere below
+                                                          
         ax = self.map_ax
 
-        # ── Reproject to Lambert 72 ──────────────────────────────────
+                                                                       
         def safe_reproject(gdf):
             try:
                 if gdf.crs is not None:
@@ -1212,31 +1336,31 @@ class BiodiversityApp:
         g2    = safe_reproject(gdf2)
         inter = safe_reproject(intersection)
 
-        # ── Color palette ────────────────────────────────────────────
+                                                                       
         BASELINE_COLOR = "#b2d8b2"
         LOSS_PALETTE   = [
-            "#ffffcc",  # yellow
-            "#006837",  # dark green
-            "#993404",  # dark orange
-            "#fbb4b9",  # pinkish
-            "#980043",  # maroon
-            "#17becf",  # teal
-            "#bcbd22",  # olive
-            "#1f77b4",  # blue
+            "#ffffcc",          
+            "#006837",              
+            "#993404",               
+            "#fbb4b9",           
+            "#980043",          
+            "#17becf",        
+            "#bcbd22",         
+            "#1f77b4",        
         ]
 
         loss_col = ("Baseline Broad Habitat Type"
                     if "Baseline Broad Habitat Type" in inter.columns else None)
 
-        # ── Layer 1: Baseline ────────────────────────────────────────
+                                                                       
         g1.plot(ax=ax, color=BASELINE_COLOR, alpha=0.45,
                 linewidth=0.6, edgecolor="#5a8a5a")
 
-        # ── Layer 2: Planned development ─────────────────────────────
+                                                                       
         g2.plot(ax=ax, facecolor="none", edgecolor="#222222",
                 linewidth=0.9, linestyle="--")
 
-        # ── Layer 3: Loss areas (one color per habitat type) ─────────
+                                                                       
         loss_types  = []
         loss_colors = {}
         if loss_col and not inter.empty:
@@ -1251,7 +1375,7 @@ class BiodiversityApp:
             inter.plot(ax=ax, color=LOSS_PALETTE[0], alpha=0.85,
                        linewidth=0.5, edgecolor="#333333")
 
-        # ── Legend (clean labels, outside axes to the right) ─────────
+                                                                       
         clean_patches = [
             mpatches.Patch(facecolor=BASELINE_COLOR, edgecolor="#5a8a5a",
                            alpha=0.6, label="Baseline habitat"),
@@ -1285,35 +1409,35 @@ class BiodiversityApp:
         )
         legend.get_frame().set_linewidth(0.6)
 
-        # ── North arrow (lower-right, axes-fraction coords) ──────────
+                                                                       
         ax.annotate("",
             xy=(0.96, 0.98), xytext=(0.96, 0.86),
             xycoords="axes fraction", textcoords="axes fraction",
             arrowprops=dict(arrowstyle="-|>", color="black", lw=1.4, mutation_scale=10))
         
 
-        # ── Scale bar (Lambert 72 — units already in metres) ─────────
+                                                                       
         xlim         = ax.get_xlim()
         ylim         = ax.get_ylim()
         map_width_m  = xlim[1] - xlim[0]
         map_height_m = ylim[1] - ylim[0]
 
         target_m = map_width_m * 0.15
-        scale_m  = 10   # safe fallback
+        scale_m  = 10                  
         for step in [1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500,
                      1000, 2000, 2500, 5000, 10000]:
             if step >= target_m * 0.5:
                 scale_m = step
                 break
 
-        scale_bar_len = scale_m   # metres == coordinate units, no conversion needed
+        scale_bar_len = scale_m                                                     
 
         bar_x0 = xlim[1] - map_width_m  * 0.08 - scale_bar_len
         bar_y0 = ylim[0] + map_height_m * 0.04
         bar_y1 = bar_y0  + map_height_m * 0.012
         half   = scale_bar_len / 2
 
-        # Clean standard alternating segments
+                                             
         segments = [
             (bar_x0, bar_x0 + half, "black"),
             (bar_x0 + half, bar_x0 + scale_bar_len, "white")
@@ -1325,31 +1449,31 @@ class BiodiversityApp:
                     [bar_y0, bar_y0, bar_y1, bar_y1, bar_y0],
                     color="black", linewidth=0.5, transform=ax.transData, zorder=6)
 
-        # Dynamic label selection
+                                 
         label_m = f"{scale_m} m" if scale_m < 1000 else f"{scale_m / 1000.0:.1f} km"
         text_padding = map_height_m * 0.018
 
-        # 0 is pushed slightly left to stay out of the way
+                                                          
         ax.text(bar_x0, bar_y1 + text_padding, "0", 
                 ha="right", va="bottom", fontsize=5, color="black", zorder=7)
         
-        # The middle number (e.g. 50) is pushed slightly left of the center joint
+                                                                                 
         mid_label = str(int(scale_m / 2)) if scale_m >= 2 else ""
         if mid_label:
           ax.text(bar_x0 + half, bar_y1 + text_padding, mid_label,
             ha="center", va="bottom", fontsize=5, color="black", zorder=7)
         
-        # The total length (e.g. 100 m) is pushed right so it never overlaps the middle label
+                                                                                             
         ax.text(bar_x0 + scale_bar_len-(scale_bar_len * 0.004), bar_y1 + text_padding, label_m, 
                 ha="left", va="bottom", fontsize=5, color="black", zorder=7)
 
-        # ── Titles and axis labels ────────────────────────────────────
+                                                                        
         ax.set_title("Biodiversity Loss per Habitat", fontsize=10, pad=8, color="#1a1a1a")
     
         ax.tick_params(axis='y', labelsize=4.5)
         ax.tick_params(axis='x', labelsize=4.5, labelrotation=90)
         
-        # Fix: Dropped coordinate text transformation from -0.3 to -0.45 to prevent Easting overlap
+                                                                                                   
         ax.text(
             0.0, -0.17, 
             "Coordinate system: Belgian Lambert 72, EPSG:31370", 
@@ -1360,19 +1484,20 @@ class BiodiversityApp:
             va='top'
         )
 
-        # Use actual widget pixel size for the figure
+                                                     
         w = self.map_canvas.get_tk_widget().winfo_width()
         h = self.map_canvas.get_tk_widget().winfo_height()
         if w > 50 and h > 50:
             self.map_fig.set_size_inches(w / self.map_fig.dpi,
                                          h / self.map_fig.dpi, forward=False)
         
-        # Increased bottom margin allocation from 0.08 to 0.18 to ensure CRS text stays visible
+                                                                                               
         self.map_fig.subplots_adjust(right=0.72, left=0.10, top=0.93, bottom=0.18)
         self.map_canvas.draw()
 
-    # -------------------- Interactive map (Folium) --------------------
+                                                                        
     def _show_interactive_map(self):
+        """Create and open an interactive Folium map for the current analysis."""
         if self._map_intersection is None:
             messagebox.showwarning("No data", "Run the calculation first.")
             return
@@ -1382,14 +1507,14 @@ class BiodiversityApp:
                 """Reproject to WGS84, re-validating geometries before and after
                 to prevent TopologyException from tiny invalidity exposed by reprojection."""
                 try:
-                    # Clean before reprojecting
+                                               
                     gdf = gdf.copy()
                     gdf["geometry"] = gdf.geometry.buffer(0)
                     gdf["geometry"] = gdf.geometry.apply(make_valid)
                     gdf = gdf[gdf.geometry.notna() & ~gdf.geometry.is_empty]
                     if gdf.crs is not None:
                         gdf = gdf.to_crs(epsg=4326)
-                    # Clean again after reprojecting
+                                                    
                     gdf["geometry"] = gdf.geometry.buffer(0)
                     gdf["geometry"] = gdf.geometry.apply(make_valid)
                     gdf = gdf[gdf.geometry.notna() & ~gdf.geometry.is_empty]
@@ -1401,7 +1526,7 @@ class BiodiversityApp:
             g2    = safe_to_wgs84(self._map_gdf2)
             inter = safe_to_wgs84(self._map_intersection)
 
-            # union_all() requires geopandas >= 0.14; fall back for older versions
+                                                                                  
             try:
                 combined = g1.geometry.union_all()
             except AttributeError:
@@ -1461,18 +1586,18 @@ class BiodiversityApp:
 
             folium.LayerControl(collapsed=False).add_to(m)
 
-            # Save to user home folder (always writable)
+                                                        
             tmp_dir  = Path(os.path.expanduser("~")) / "BiodiversityTool_maps"
             tmp_dir.mkdir(exist_ok=True)
             tmp_path = tmp_dir / f"map_{int(time.time())}.html"
             m.save(str(tmp_path))
-            # Keep only 5 most recent maps to avoid accumulation
+                                                                
             existing = sorted(tmp_dir.glob("map_*.html"))
             for old_f in existing[:-4]:
                 try: old_f.unlink()
                 except Exception: pass
 
-            # Try to open browser, always show path so user can open manually if needed
+                                                                                       
             try:
                 webbrowser.open(tmp_path.as_uri())
                 messagebox.showinfo("Interactive Map",
@@ -1488,8 +1613,9 @@ class BiodiversityApp:
                 f"Failed to generate interactive map:\n\n{str(e)}\n\n"
                 f"Make sure folium is installed:  pip install folium branca")
 
-    # -------------------- Export static map --------------------
+                                                                 
     def _export_static_map(self):
+        """Export the current static map figure to a file selected by the user."""
         if self._map_intersection is None:
             messagebox.showwarning("No data", "Run the calculation first.")
             return
@@ -1504,8 +1630,9 @@ class BiodiversityApp:
             except Exception as e:
                 messagebox.showerror("Export failed", str(e))
 
-    # -------------------- Gain Tab --------------------
+                                                        
     def _build_gain_tab(self):
+        """Create the gain-calculation tab with all habitat restoration inputs."""
         card = ttk.Frame(self.tab_gain, padding=12, relief="raised")
         card.pack(fill="both", expand=True, padx=10, pady=8)
 
@@ -1631,8 +1758,9 @@ class BiodiversityApp:
         ent_strategic.bind("<<ComboboxSelected>>",lambda e: self._on_strategic_change())
         ent_area.bind("<KeyRelease>",           lambda e: self._on_area_change())
 
-    # -------------------- Baseline Tab --------------------
+                                                            
     def _build_baseline_tab(self):
+        """Create the baseline comparison tab for parcel-level biodiversity scoring."""
         outer  = ttk.Frame(self.tab_baseline)
         outer.pack(fill="both", expand=True)
 
@@ -1676,12 +1804,14 @@ class BiodiversityApp:
         self.comparison_frame      = ttk.LabelFrame(card, text="🔄  Compare with Gain Calculator", padding=10)
 
     def _browse_baseline_file(self):
+        """Open a file selection dialog for an uploaded baseline dataset."""
         fn = filedialog.askopenfilename(filetypes=[
             ("CSV files", "*.csv"), ("Excel files", "*.xlsx *.xls"), ("All files", "*.*")])
         if fn:
             self.baseline_file_path.set(fn)
 
     def _load_baseline_file(self):
+        """Load a baseline CSV or Excel file and prompt for required column mapping."""
         filepath = self.baseline_file_path.get().strip()
         if not filepath:
             messagebox.showerror("Error", "Please select a file first")
@@ -1689,7 +1819,7 @@ class BiodiversityApp:
         try:
             self.baseline_df = (pd.read_csv(filepath) if filepath.endswith(".csv")
                                 else pd.read_excel(filepath))
-            # Column mapping — show dialog for any missing expected columns
+                                                                           
             missing = [c for c in REQUIRED_BASE_COLS if c not in self.baseline_df.columns]
             if missing:
                 col_map = self._show_column_mapping_dialog(
@@ -1697,7 +1827,7 @@ class BiodiversityApp:
                     required_cols=missing)
                 rename = {v: k for k, v in col_map.items()}
                 self.baseline_df = self.baseline_df.rename(columns=rename)
-                # Check again after mapping
+                                           
                 still_missing = [c for c in REQUIRED_BASE_COLS
                                  if c not in self.baseline_df.columns]
                 if still_missing:
@@ -1711,6 +1841,7 @@ class BiodiversityApp:
             self.baseline_df = None
 
     def _on_parcel_selected_baseline(self, event):
+        """Display parcel-level details and mapping controls for the selected parcel."""
         parcel_ref = self.parcel_var.get()
         if self.baseline_df is None:
             return
@@ -1787,6 +1918,7 @@ class BiodiversityApp:
         self.baseline_specific_habitat = specific_habitat
 
     def _on_broad_mapping_change(self, event):
+        """Update the specific habitat choices when the broad habitat changes."""
         selected_broad = self.broad_mapping_var.get()
         if selected_broad:
             self.specific_mapping_combo["values"] = (
@@ -1795,6 +1927,7 @@ class BiodiversityApp:
             self.specific_mapping_var.set("")
 
     def _calculate_baseline_units(self):
+        """Calculate and display biodiversity units for the selected baseline parcel."""
         mapped_broad     = self.broad_mapping_var.get()
         mapped_specific  = self.specific_mapping_var.get()
         mapped_strategic = self.strategic_mapping_var.get()
@@ -1844,6 +1977,7 @@ class BiodiversityApp:
         self._show_comparison_section()
 
     def _show_comparison_section(self):
+        """Populate the comparison panel with calculated baseline values."""
         for widget in self.comparison_frame.winfo_children():
             widget.destroy()
         self.comparison_frame.pack(fill="x", pady=(0, 10))
@@ -1856,6 +1990,7 @@ class BiodiversityApp:
                    command=self._compare_with_gain_calculator).pack(pady=10)
 
     def _compare_with_gain_calculator(self):
+        """Show how a gain scenario compares with the selected baseline parcel."""
         gain_tab_result = self.gain_result.cget("text")
         if "Biodiversity Units:" not in gain_tab_result or gain_tab_result == "Biodiversity Units: ---":
             messagebox.showwarning("Warning", "Please calculate a scenario in the Gain Calculator first")
@@ -1871,6 +2006,7 @@ class BiodiversityApp:
             f"  Gain: Area × Condition × Difficulty × Spatial × Strategic × Years × Distinctiveness")
 
     def _clear_baseline_data(self):
+        """Reset the baseline tab state and clear all loaded parcel information."""
         self.baseline_df         = None
         self.current_parcel_data = None
         self.parcel_var.set("")
@@ -1885,18 +2021,20 @@ class BiodiversityApp:
             frame.pack_forget()
         messagebox.showinfo("Cleared", "Baseline data cleared")
 
-    # -------------------- Gain callbacks --------------------
+                                                              
     def _on_code_change(self):
+        """Refresh the plot-code label when the user edits the input field."""
         self.lbl_code.config(text=f"Plot code: {self.var_code.get()}")
         self.gain_result.config(text="Biodiversity Units: -")
 
     def _on_broad_change(self, cb_specific):
+        """Populate the specific-habitat list whenever the broad habitat changes."""
         b = self.var_broad.get()
         related = (self.habitats_df[self.habitats_df["Broad Habitat Type"] == b]
                    ["Specific Habitat"].dropna().unique().tolist())
         cb_specific.set_completion_list(related)
         self.var_specific.set("")
-        # Show how many specific habitats are available under this broad type
+                                                                             
         if b and related:
             self.lbl_distinct.config(text=f"Distinctiveness: ({len(related)} habitats available)")
         else:
@@ -1904,6 +2042,7 @@ class BiodiversityApp:
         self.gain_result.config(text="Biodiversity Units: -")
 
     def _on_specific_change(self):
+        """Display the distinctiveness score for the currently selected habitat."""
         row = self.habitats_df[self.habitats_df["Specific Habitat"] == self.var_specific.get()]
         if not row.empty:
             self.lbl_distinct.config(text=f"Distinctiveness: {float(row.iloc[0].get('Distinctiveness Score', 0.0))}")
@@ -1912,31 +2051,38 @@ class BiodiversityApp:
         self.gain_result.config(text="Biodiversity Units: -")
 
     def _on_year_change(self):
+        """Update the displayed year multiplier when the target year changes."""
         row = self.years_df[self.years_df["Years"].astype(str) == str(self.var_year.get())]
         self.lbl_yearmult.config(text=f"Year multiplier: {float(row.iloc[0]['Multiplier'])}" if not row.empty else "Year multiplier: -")
         self.gain_result.config(text="Biodiversity Units: -")
 
     def _on_condition_change(self):
+        """Refresh the displayed condition multiplier when the choice changes."""
         self.lbl_cond.config(text=f"Condition score: {CONDITION_MAPPING.get(self.var_condition.get(), '-')}")
         self.gain_result.config(text="Biodiversity Units: -")
 
     def _on_difficulty_change(self):
+        """Refresh the displayed difficulty multiplier when the choice changes."""
         self.lbl_diff.config(text=f"Difficulty multiplier: {DIFFICULTY_MAPPING.get(self.var_difficulty.get(), '-')}")
         self.gain_result.config(text="Biodiversity Units: -")
 
     def _on_spatial_change(self):
+        """Refresh the displayed spatial multiplier when the choice changes."""
         self.lbl_spat.config(text=f"Spatial multiplier: {SPATIAL_MAPPING.get(self.var_spatial.get(), '-')}")
         self.gain_result.config(text="Biodiversity Units: -")
 
     def _on_strategic_change(self):
+        """Refresh the displayed strategic multiplier when the choice changes."""
         self.lbl_strat.config(text=f"Strategic multiplier: {STRATEGIC_MAPPING.get(self.var_strategic.get(), '-')}")
         self.gain_result.config(text="Biodiversity Units: -")
 
     def _on_area_change(self):
+        """Refresh the displayed area value when the user edits the field."""
         self.lbl_area.config(text=f"Area: {self.var_area.get()}")
         self.gain_result.config(text="Biodiversity Units: -")
 
     def _calculate_gain(self):
+        """Calculate biodiversity gain units from the selected habitat and parameters."""
         missing = []
         if not self.var_broad.get():     missing.append("Broad habitat")
         if not self.var_specific.get():  missing.append("Specific habitat")
@@ -1968,6 +2114,7 @@ class BiodiversityApp:
         self.gain_result.config(text=f"Biodiversity Units: {units:.3f}")
 
     def _add_gain_to_list(self):
+        """Calculate a gain scenario and append it to the saved list for later export."""
         self._calculate_gain()
         result_text = self.gain_result.cget("text")
         if "Biodiversity Units:" not in result_text:
@@ -2001,6 +2148,7 @@ class BiodiversityApp:
             f"Added: {item['habitat']}\nBiodiversity Units: {units:.3f}\nNew Total: {self.gain_total:.3f}")
 
     def _refresh_gain_tree(self):
+        """Refresh the gain-calculation list displayed in the treeview."""
         for item in self.gain_tree.get_children():
             self.gain_tree.delete(item)
         for i, item in enumerate(self.gain_items):
@@ -2011,6 +2159,7 @@ class BiodiversityApp:
             self.gain_total_label.config(text=f"Total Biodiversity Units: {self.gain_total:.3f}")
 
     def _remove_gain_item(self, event):
+        """Remove a gain calculation from the saved list after user selection."""
         selection = self.gain_tree.selection()
         if not selection:
             return
@@ -2022,7 +2171,7 @@ class BiodiversityApp:
         except (ValueError, IndexError):
             removed_units = 0
         item = self.gain_tree.item(item_iid, "values")
-# Match by content rather than index:
+                                     
         self.gain_items = [g for g in self.gain_items 
                    if not (g.get("plot_code","") == item[0] and 
                            f"{g['area']:.2f}" == item[2])]
@@ -2034,12 +2183,14 @@ class BiodiversityApp:
             f"Plot code: {item_values[0] if item_values else 'N/A'}")
 
     def _clear_gain_list(self):
+        """Clear all saved gain calculations after confirmation."""
         if self.gain_items and messagebox.askyesno("Clear All", "Clear all saved calculations?"):
             self.gain_items = []
             self.gain_total = 0.0
             self._refresh_gain_tree()
 
     def _save_gain_selection(self):
+        """Export either the current gain scenario or all saved scenarios to CSV."""
         if not self.gain_items:
             messagebox.showwarning("No data", "Add calculations using 'Add to List' first."); return
         choice = messagebox.askyesno("Save Options",
@@ -2050,6 +2201,7 @@ class BiodiversityApp:
             self._save_single_gain_item()
 
     def _save_single_gain_item(self):
+        """Save the currently calculated gain scenario as a CSV row."""
         self._calculate_gain()
         txt = self.gain_result.cget("text")
         if "Biodiversity Units:" not in txt:
@@ -2088,6 +2240,7 @@ class BiodiversityApp:
         self._refresh_saved_table()
 
     def _save_all_gain_items(self):
+        """Save all gain scenarios currently stored in memory to a CSV file."""
         if not self.gain_items:
             return
         savepath = filedialog.asksaveasfilename(defaultextension=".csv",
@@ -2130,8 +2283,9 @@ class BiodiversityApp:
         except Exception as e:
             messagebox.showerror("Save error", str(e))
 
-    # -------------------- Saved Results Tab --------------------
+                                                                 
     def _build_saved_tab(self):
+        """Create the saved-results tab for browsing and exporting previous runs."""
         card = ttk.Frame(self.tab_saved, padding=12)
         card.pack(fill="both", expand=True, padx=10, pady=8)
         cols = ["Timestamp", "Plot code", "Broad Habitat", "Specific Habitat", "Distinctiveness",
@@ -2148,6 +2302,7 @@ class BiodiversityApp:
         ttk.Button(btns, text="Clear Saved Rows",  command=self._clear_saved).pack(side="left", padx=6)
 
     def _refresh_saved_table(self):
+        """Refresh the saved-results tree view from the in-memory row collection."""
         for i in self.saved_tree.get_children():
             self.saved_tree.delete(i)
         for row in self.saved_rows:
@@ -2158,6 +2313,7 @@ class BiodiversityApp:
                 row.get("Difficulty"), row.get("Area (ha)"), row.get("Biodiversity Units")))
 
     def _export_saved_all(self):
+        """Export all saved calculation rows to a CSV file selected by the user."""
         if not self.saved_rows:
             messagebox.showinfo("No data", "No saved rows to export."); return
         p = filedialog.asksaveasfilename(defaultextension=".csv", filetypes=[("CSV", "*.csv")])
@@ -2174,13 +2330,15 @@ class BiodiversityApp:
             messagebox.showerror("Export error", str(e))
 
     def _clear_saved(self):
+        """Remove all saved results after user confirmation."""
         if messagebox.askyesno("Confirm", "Clear all saved rows?"):
             self.saved_rows = []
             self._refresh_saved_table()
 
 
-# -------------------- Run --------------------
+                                               
 def main():
+    """Launch the Tkinter application and start the main event loop."""
     root = tk.Tk()
     root.configure(bg=MAIN_BG)
     try:
