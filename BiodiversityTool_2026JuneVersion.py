@@ -69,6 +69,7 @@ LOGOS_DIR = BASE_DIR / "logos"
 MANUAL_DIR = BASE_DIR / "manuals"
 HABITATS_CSV = DATA_DIR / "all_habitats.csv"
 YEARS_CSV = DATA_DIR / "target_year.csv"
+HEDGEROWS_CSV = DATA_DIR / "hedgerow_habitats.csv"
 ENG_MANUAL = MANUAL_DIR / "manual_english.pdf"
 ND_MANUAL = MANUAL_DIR / "manual_nederlands.pdf"
 
@@ -79,6 +80,44 @@ DIFFICULTY_MAPPING  = {"Very high": 0.1, "High": 0.33, "Medium": 0.67, "Low": 1.
 SPATIAL_MAPPING     = {"On-site": 1.0, "Within same city": 0.75, "Somewhere further": 0.5}
 STRATEGIC_MAPPING   = {"High": 1.15, "Medium": 1.1, "Low": 1.0}
 DISTINCTIVENESS_MAP = {"V.High": 8, "High": 6, "Medium": 4, "Low": 2, "V.Low": 0}
+
+
+# Hedgerows use the same multiplier dictionaries above, but only these three
+# condition categories (metric workbook sheet 'G-6 Hedgerow Data', AJ:AK).
+HEDGE_CONDITION_MAPPING = {"Good": 3.0, "Moderate": 2.0, "Poor": 1.0}
+# Every hedgerow type in the metric has "Low" technical difficulty for both
+# creation and enhancement (same sheet, columns AF:AG), so it is fixed here
+# rather than offered as a choice.
+HEDGE_DIFFICULTY_SCORE = DIFFICULTY_MAPPING["Low"]
+
+
+# Individual trees: DBH size classes and their notional area equivalent,
+# from the metric's tree helper (Table 15 of the Statutory Biodiversity
+# Metric User Guide). dbh_min is exclusive, dbh_max is inclusive (None = no
+# upper bound).
+TREE_SIZE_CLASSES = [
+    ("Small",      7.5,  30,   0.0041),
+    ("Medium",     30,   60,   0.0163),
+    ("Large",      60,   90,   0.0366),
+    ("Very large", 90,   None, 0.0765),
+]
+
+def classify_tree_dbh(dbh_cm):
+    """Return (size_class_name, area_equivalent_ha_per_tree) for a given DBH.
+
+    Args:
+        dbh_cm (float): Diameter at breast height, in centimetres.
+
+    Returns:
+        tuple[str, float] | tuple[None, None]: The matching size class and
+        its per-tree area equivalent, or (None, None) if dbh_cm is below the
+        smallest recognised class (<=7.5 cm, not counted as a qualifying
+        tree under the metric's tree helper).
+    """
+    for name, lo, hi, area in TREE_SIZE_CLASSES:
+        if dbh_cm > lo and (hi is None or dbh_cm <= hi):
+            return name, area
+    return None, None
 
                                                                              
 COL_BROAD     = "Baseline Broad Habitat Type"
@@ -677,16 +716,23 @@ class BiodiversityApp:
         self.logo_manager = LogoManager(LOGOS_DIR)
         self.habitats_df  = self._load_habitats()
         self.years_df     = self._load_years()
+        self.hedgerows_df = self._load_hedgerows()
 
         self.saved_rows              = []
         self.gain_items              = []
         self.gain_total              = 0.0
+        self.hedge_items             = []
+        self.hedge_total             = 0.0
         self.baseline_df             = None
         self.current_parcel_data     = None
         self.mapped_specific_habitat = None
         self.mapped_strategic        = None
         self.gain_tree               = None
         self.gain_total_label        = None
+        self.hedge_tree              = None
+        self.hedge_total_label       = None
+        self.tree_rows               = []
+        self.tree_popup_active       = False
 
         self._map_gdf1         = None
         self._map_gdf2         = None
@@ -925,6 +971,31 @@ class BiodiversityApp:
             except Exception as e:
                 print("Reading years failed:", e)
         return pd.DataFrame([{"Years": "5", "Multiplier": 1.05}, {"Years": "10", "Multiplier": 1.0}])
+
+    def _load_hedgerows(self):
+        """Load the hedgerow habitat reference table (separate from area habitats).
+
+        Returns:
+            pandas.DataFrame: Hedgerow lookup data with distinctiveness scores added.
+        """
+        if HEDGEROWS_CSV.exists():
+            try:
+                df = pd.read_csv(HEDGEROWS_CSV, dtype=str).fillna("")
+                if "Specific Habitat" not in df.columns:
+                    raise Exception("missing headers")
+                if "Distinctiveness Category" not in df.columns:
+                    df["Distinctiveness Category"] = ""
+                df["Distinctiveness Score"] = (
+                    df["Distinctiveness Category"].map(DISTINCTIVENESS_MAP).fillna(0).astype(float)
+                )
+                return df
+            except Exception as e:
+                print("Reading hedgerow habitats failed:", e)
+        sample = pd.DataFrame([
+            {"Broad Habitat Type": "Hedgerows", "Specific Habitat": "Native hedgerow", "Distinctiveness Category": "Low"},
+        ])
+        sample["Distinctiveness Score"] = sample["Distinctiveness Category"].map(DISTINCTIVENESS_MAP).fillna(0).astype(float)
+        return sample
 
                                                         
     def _build_ui(self):
@@ -1184,8 +1255,8 @@ class BiodiversityApp:
                 if "v.high" in s or "very high" in s or "8" in s: return 8
                 if "high" in s and "very" not in s:                 return 6
                 if "medium" in s:                                     return 4
-                if "low" in s and "very" not in s:                  return 2
                 if "v.low" in s or "very low" in s:                 return 0
+                if "low" in s:                                      return 2
                 return np.nan
 
             cond_col  = COL_CONDITION if COL_CONDITION in gdf1.columns else None
@@ -1632,8 +1703,21 @@ class BiodiversityApp:
 
                                                         
     def _build_gain_tab(self):
-        """Create the gain-calculation tab with all habitat restoration inputs."""
-        card = ttk.Frame(self.tab_gain, padding=12, relief="raised")
+        """Create the Gain Calculator tab, split into Area Habitats and Hedgerows sub-tabs."""
+        self.gain_subnotebook = ttk.Notebook(self.tab_gain)
+        self.gain_subnotebook.pack(fill="both", expand=True, padx=4, pady=4)
+
+        self.tab_gain_area  = ttk.Frame(self.gain_subnotebook)
+        self.tab_gain_hedge = ttk.Frame(self.gain_subnotebook)
+        self.gain_subnotebook.add(self.tab_gain_area,  text="🌳 Area Habitats")
+        self.gain_subnotebook.add(self.tab_gain_hedge, text="🌿 Hedgerows")
+
+        self._build_area_gain_tab(self.tab_gain_area)
+        self._build_hedge_gain_tab(self.tab_gain_hedge)
+
+    def _build_area_gain_tab(self, parent):
+        """Create the area-habitat gain-calculation inputs (the original Gain Calculator)."""
+        card = ttk.Frame(parent, padding=12, relief="raised")
         card.pack(fill="both", expand=True, padx=10, pady=8)
 
         ttk.Separator(card, orient="horizontal").pack(fill="x", pady=5)
@@ -1758,7 +1842,361 @@ class BiodiversityApp:
         ent_strategic.bind("<<ComboboxSelected>>",lambda e: self._on_strategic_change())
         ent_area.bind("<KeyRelease>",           lambda e: self._on_area_change())
 
-                                                            
+    def _build_hedge_gain_tab(self, parent):
+        """Create the hedgerow gain-calculation inputs (length-based, separate from area habitats)."""
+        card = ttk.Frame(parent, padding=12, relief="raised")
+        card.pack(fill="both", expand=True, padx=10, pady=8)
+
+        ttk.Separator(card, orient="horizontal").pack(fill="x", pady=5)
+        frm = ttk.Frame(card)
+        frm.pack(fill="both", expand=True)
+
+        ttk.Label(frm, text="Parameter",        font=("Segoe UI", 10, "bold")).grid(row=0, column=0, padx=8, pady=6, sticky="w")
+        ttk.Label(frm, text="Explanation",      font=("Segoe UI", 10, "bold")).grid(row=0, column=1, padx=8, pady=6, sticky="w")
+        ttk.Label(frm, text="Selection",        font=("Segoe UI", 10, "bold")).grid(row=0, column=2, padx=8, pady=6, sticky="w")
+        ttk.Label(frm, text="Multiplier / Score", font=("Segoe UI", 10, "bold")).grid(row=0, column=3, padx=8, pady=6, sticky="w")
+
+        self.var_hedge_code      = tk.StringVar()
+        self.var_hedge_type      = tk.StringVar()
+        self.var_hedge_year      = tk.StringVar()
+        self.var_hedge_condition = tk.StringVar()
+        self.var_hedge_spatial   = tk.StringVar()
+        self.var_hedge_strategic = tk.StringVar()
+        self.var_hedge_length    = tk.StringVar()
+
+        r = 1
+        def add_row(label_text, explanation_text, widget):
+            nonlocal r
+            ttk.Label(frm, text=label_text).grid(row=r, column=0, sticky="w", padx=8, pady=(6, 2))
+            ttk.Label(frm, text=explanation_text, font=("Segoe UI", 9, "italic"),
+                      foreground="#444").grid(row=r, column=1, sticky="w", padx=8, pady=(6, 2))
+            widget.grid(row=r, column=2, sticky="w", padx=8, pady=(6, 2))
+            this_row = r
+            r += 1
+            return this_row
+
+        hedge_code_ent = ttk.Entry(frm, textvariable=self.var_hedge_code, width=18)
+        row_hp = add_row("Plot code:", "Enter plot code.", hedge_code_ent)
+
+        hedge_type_vals = sorted(self.hedgerows_df["Specific Habitat"].unique().tolist())
+        cb_hedge_type = AutocompleteCombobox(frm, textvariable=self.var_hedge_type, state="normal", width=44)
+        cb_hedge_type.set_completion_list(hedge_type_vals)
+        row_ht = add_row("Hedgerow type:", "Hedgerow habitat type (sets distinctiveness).", cb_hedge_type)
+
+        hedge_year_vals = [str(x) for x in self.years_df["Years"].tolist()]
+        cb_hedge_year = AutocompleteCombobox(frm, textvariable=self.var_hedge_year, values=hedge_year_vals, state="normal", width=20)
+        row_hy = add_row("Time to target (years):", "How long until the hedgerow reaches target ecological value.", cb_hedge_year)
+
+        cb_hedge_condition = ttk.Combobox(frm, textvariable=self.var_hedge_condition,
+            values=list(HEDGE_CONDITION_MAPPING.keys()), state="readonly", width=28)
+        row_hc = add_row("Hedgerow condition:", "The current quality and health of the hedgerow.", cb_hedge_condition)
+
+        cb_hedge_spatial = ttk.Combobox(frm, textvariable=self.var_hedge_spatial,
+            values=list(SPATIAL_MAPPING.keys()), state="readonly", width=28)
+        row_hsp = add_row("Spatial risk category:", "Location risk for hedgerow creation (closer is better).", cb_hedge_spatial)
+
+        ent_hedge_strategic = ttk.Combobox(frm, textvariable=self.var_hedge_strategic,
+            values=list(STRATEGIC_MAPPING.keys()), state="readonly", width=18)
+        row_hst = add_row("Strategic significance:",
+            "High: Important for achieving goals of biodiversity plan = 1.15.  Low: 1.0", ent_hedge_strategic)
+
+        ent_hedge_length = ttk.Entry(frm, textvariable=self.var_hedge_length, width=18)
+        row_hl = add_row("Length (km):", "Enter hedgerow length in kilometres (e.g., 0.350).", ent_hedge_length)
+
+        self.lbl_hedge_code     = ttk.Label(frm, text="Plot code: -");         self.lbl_hedge_code.grid(row=row_hp,  column=3, sticky="w", padx=6)
+        self.lbl_hedge_distinct = ttk.Label(frm, text="Distinctiveness: -");   self.lbl_hedge_distinct.grid(row=row_ht, column=3, sticky="w", padx=6)
+        self.lbl_hedge_yearmult = ttk.Label(frm, text="Year multiplier: -");   self.lbl_hedge_yearmult.grid(row=row_hy, column=3, sticky="w", padx=6)
+        self.lbl_hedge_cond     = ttk.Label(frm, text="Condition score: -");   self.lbl_hedge_cond.grid(row=row_hc,  column=3, sticky="w", padx=6)
+        self.lbl_hedge_diff     = ttk.Label(frm, text=f"Difficulty multiplier: {HEDGE_DIFFICULTY_SCORE} (fixed for hedgerows)")
+        self.lbl_hedge_diff.grid(row=row_hc, column=4, sticky="w", padx=6)
+        self.lbl_hedge_spat     = ttk.Label(frm, text="Spatial multiplier: -"); self.lbl_hedge_spat.grid(row=row_hsp, column=3, sticky="w", padx=6)
+        self.lbl_hedge_strat    = ttk.Label(frm, text="Strategic multiplier: -"); self.lbl_hedge_strat.grid(row=row_hst, column=3, sticky="w", padx=6)
+        self.lbl_hedge_length   = ttk.Label(frm, text="Length: -");               self.lbl_hedge_length.grid(row=row_hl,  column=3, sticky="w", padx=6)
+
+        btn_frame = ttk.Frame(card)
+        btn_frame.pack(fill="x", pady=10)
+        ttk.Button(btn_frame, text="Calculate",                            command=self._calculate_hedge).pack(side="left", padx=8)
+        ttk.Button(btn_frame, text="Add to List",                          command=self._add_hedge_to_list).pack(side="left", padx=8)
+        ttk.Button(btn_frame, text="Clear List",                           command=self._clear_hedge_list).pack(side="left", padx=8)
+        ttk.Button(btn_frame, text="Save selection (CSV & saved results)", command=self._save_hedge_selection).pack(side="left", padx=8)
+
+        ttk.Separator(card, orient="horizontal").pack(fill="x", pady=10)
+        self.hedge_result = ttk.Label(card, text="Biodiversity Units: ", font=("Segoe UI", 12, "bold"))
+        self.hedge_result.pack(anchor="w", pady=(6, 0), padx=6)
+        self.hedge_total_label = ttk.Label(card, text="Total Biodiversity Units: 0.000",
+            font=("Segoe UI", 12, "bold"), foreground="#2E7D32")
+        self.hedge_total_label.pack(anchor="w", pady=(10, 5))
+
+        ttk.Separator(card, orient="horizontal").pack(fill="x", pady=5)
+        self.hedge_equation = ttk.Label(card,
+            text="Biodiversity Units = Distinctiveness × Year multiplier × Condition × Difficulty × Spatial risk × Strategic Significance × Length (km)")
+        self.hedge_equation.pack(anchor="w", pady=(6, 0), padx=6)
+
+        ttk.Separator(card, orient="horizontal").pack(fill="x", pady=10)
+        list_frame = ttk.Label(card, text="Saved Hedgerow Calculations", padding=5)
+        list_frame.pack(fill="both", expand=True, pady=10)
+
+        columns = ("Plot code", "Hedgerow type", "Length (km)", "Units", "Delete")
+        self.hedge_tree = ttk.Treeview(list_frame, columns=columns, show="headings", height=6)
+        for col in ["Plot code", "Hedgerow type", "Length (km)", "Units"]:
+            self.hedge_tree.heading(col, text=col)
+        self.hedge_tree.heading("Delete", text="")
+        self.hedge_tree.column("Delete", width=50)
+        self.hedge_tree.pack(fill="both", expand=True)
+
+        scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=self.hedge_tree.yview)
+        scrollbar.pack(side="right", fill="y")
+        self.hedge_tree.configure(yscrollcommand=scrollbar.set)
+        self.hedge_tree.bind("<Double-1>", self._remove_hedge_item)
+
+        hedge_code_ent.bind("<KeyRelease>",         lambda e: self._on_hedge_code_change())
+        cb_hedge_type.bind("<<ComboboxSelected>>",  lambda e: self._on_hedge_type_change())
+        cb_hedge_type.bind("<KeyRelease>",          lambda e: self._on_hedge_type_change())
+        cb_hedge_year.bind("<<ComboboxSelected>>",  lambda e: self._on_hedge_year_change())
+        cb_hedge_condition.bind("<<ComboboxSelected>>", lambda e: self._on_hedge_condition_change())
+        cb_hedge_spatial.bind("<<ComboboxSelected>>",   lambda e: self._on_hedge_spatial_change())
+        ent_hedge_strategic.bind("<<ComboboxSelected>>",lambda e: self._on_hedge_strategic_change())
+        ent_hedge_length.bind("<KeyRelease>",       lambda e: self._on_hedge_length_change())
+
+    def _on_hedge_code_change(self):
+        """Refresh the plot-code label when the user edits the hedgerow plot code field."""
+        self.lbl_hedge_code.config(text=f"Plot code: {self.var_hedge_code.get()}")
+        self.hedge_result.config(text="Biodiversity Units: -")
+
+    def _on_hedge_type_change(self):
+        """Display the distinctiveness score for the currently selected hedgerow type."""
+        row = self.hedgerows_df[self.hedgerows_df["Specific Habitat"] == self.var_hedge_type.get()]
+        if not row.empty:
+            self.lbl_hedge_distinct.config(text=f"Distinctiveness: {float(row.iloc[0].get('Distinctiveness Score', 0.0))}")
+        else:
+            self.lbl_hedge_distinct.config(text="Distinctiveness: -")
+        self.hedge_result.config(text="Biodiversity Units: -")
+
+    def _on_hedge_year_change(self):
+        """Update the displayed year multiplier when the hedgerow target year changes."""
+        row = self.years_df[self.years_df["Years"].astype(str) == str(self.var_hedge_year.get())]
+        self.lbl_hedge_yearmult.config(text=f"Year multiplier: {float(row.iloc[0]['Multiplier'])}" if not row.empty else "Year multiplier: -")
+        self.hedge_result.config(text="Biodiversity Units: -")
+
+    def _on_hedge_condition_change(self):
+        """Refresh the displayed condition score when the hedgerow condition choice changes."""
+        self.lbl_hedge_cond.config(text=f"Condition score: {HEDGE_CONDITION_MAPPING.get(self.var_hedge_condition.get(), '-')}")
+        self.hedge_result.config(text="Biodiversity Units: -")
+
+    def _on_hedge_spatial_change(self):
+        """Refresh the displayed spatial multiplier when the hedgerow choice changes."""
+        self.lbl_hedge_spat.config(text=f"Spatial multiplier: {SPATIAL_MAPPING.get(self.var_hedge_spatial.get(), '-')}")
+        self.hedge_result.config(text="Biodiversity Units: -")
+
+    def _on_hedge_strategic_change(self):
+        """Refresh the displayed strategic multiplier when the hedgerow choice changes."""
+        self.lbl_hedge_strat.config(text=f"Strategic multiplier: {STRATEGIC_MAPPING.get(self.var_hedge_strategic.get(), '-')}")
+        self.hedge_result.config(text="Biodiversity Units: -")
+
+    def _on_hedge_length_change(self):
+        """Refresh the displayed length value when the user edits the hedgerow length field."""
+        self.lbl_hedge_length.config(text=f"Length: {self.var_hedge_length.get()}")
+        self.hedge_result.config(text="Biodiversity Units: -")
+
+    def _calculate_hedge(self):
+        """Calculate biodiversity gain units for a hedgerow from the selected parameters."""
+        missing = []
+        if not self.var_hedge_type.get():      missing.append("Hedgerow type")
+        if not self.var_hedge_year.get():      missing.append("Time to target")
+        if not self.var_hedge_condition.get(): missing.append("Hedgerow condition")
+        if not self.var_hedge_spatial.get():   missing.append("Spatial risk category")
+        if not self.var_hedge_strategic.get(): missing.append("Strategic significance")
+        if not self.var_hedge_length.get():    missing.append("Length (km)")
+        if missing:
+            messagebox.showwarning("Missing information", "Please provide: " + ", ".join(missing))
+            return
+
+        row = self.hedgerows_df[self.hedgerows_df["Specific Habitat"] == self.var_hedge_type.get()]
+        distinct = float(row.iloc[0].get("Distinctiveness Score", 0.0)) if not row.empty else 0.0
+        rowy     = self.years_df[self.years_df["Years"].astype(str) == str(self.var_hedge_year.get())]
+        year_mult = float(rowy.iloc[0]["Multiplier"]) if not rowy.empty else 1.0
+        cond     = float(HEDGE_CONDITION_MAPPING.get(self.var_hedge_condition.get(), 0.0))
+        diff     = float(HEDGE_DIFFICULTY_SCORE)
+        spat     = float(SPATIAL_MAPPING.get(self.var_hedge_spatial.get(), 0.0))
+        strat    = float(STRATEGIC_MAPPING.get(self.var_hedge_strategic.get(), 0.0))
+        try:
+            length_km = float(self.var_hedge_length.get())
+        except ValueError:
+            messagebox.showerror("Invalid length", "Length (km) must be a number."); return
+
+        units = distinct * year_mult * cond * diff * spat * strat * length_km
+        self.hedge_result.config(text=f"Biodiversity Units: {units:.3f}")
+
+    def _add_hedge_to_list(self):
+        """Calculate a hedgerow scenario and append it to the saved list for later export."""
+        self._calculate_hedge()
+        result_text = self.hedge_result.cget("text")
+        if "Biodiversity Units:" not in result_text:
+            messagebox.showwarning("No calculation", "Please calculate first"); return
+        units = float(result_text.split(":")[1].strip())
+        item = {
+            "plot_code":           self.var_hedge_code.get().strip(),
+            "habitat":             self.var_hedge_type.get().strip() or "Unknown Hedgerow Type",
+            "length":              float(self.var_hedge_length.get()) if self.var_hedge_length.get() else 0,
+            "units":               units,
+            "hedge_type":          self.var_hedge_type.get(),
+            "condition":           self.var_hedge_condition.get(),
+            "spatial":             self.var_hedge_spatial.get(),
+            "strategic":           self.var_hedge_strategic.get(),
+            "years":               self.var_hedge_year.get(),
+            "distinctiveness":     self.lbl_hedge_distinct.cget("text").split(":")[1].strip(),
+            "condition_score":     self.lbl_hedge_cond.cget("text").split(":")[1].strip(),
+            "difficulty_score":    str(HEDGE_DIFFICULTY_SCORE),
+            "spatial_multiplier":  self.lbl_hedge_spat.cget("text").split(":")[1].strip(),
+            "strategic_multiplier":self.lbl_hedge_strat.cget("text").split(":")[1].strip(),
+            "year_multiplier":     self.lbl_hedge_yearmult.cget("text").split(":")[1].strip(),
+        }
+        self.hedge_items.append(item)
+        self.hedge_total += units
+        self._refresh_hedge_tree()
+        messagebox.showinfo("Added",
+            f"Added: {item['habitat']}\nBiodiversity Units: {units:.3f}\nNew Total: {self.hedge_total:.3f}")
+
+    def _refresh_hedge_tree(self):
+        """Refresh the hedgerow-calculation list displayed in the treeview."""
+        for item in self.hedge_tree.get_children():
+            self.hedge_tree.delete(item)
+        for i, item in enumerate(self.hedge_items):
+            self.hedge_tree.insert("", "end", iid=str(i), values=(
+                item.get("plot_code", ""), item["habitat"],
+                f"{item['length']:.3f}", f"{item['units']:.3f}", "Delete ❌"))
+        if self.hedge_total_label:
+            self.hedge_total_label.config(text=f"Total Biodiversity Units: {self.hedge_total:.3f}")
+
+    def _remove_hedge_item(self, event):
+        """Remove a hedgerow calculation from the saved list after user selection."""
+        selection = self.hedge_tree.selection()
+        if not selection:
+            return
+        item_iid = selection[0]
+        item_values = self.hedge_tree.item(item_iid, "values")
+        removed_habitat = item_values[1] if len(item_values) > 1 else "Unknown"
+        try:
+            removed_units = float(item_values[3]) if len(item_values) > 3 else 0
+        except (ValueError, IndexError):
+            removed_units = 0
+
+        self.hedge_items = [h for h in self.hedge_items
+                   if not (h.get("plot_code","") == item_values[0] and
+                           f"{h['length']:.3f}" == item_values[2])]
+        self.hedge_total = sum(i["units"] for i in self.hedge_items)
+        self._refresh_hedge_tree()
+
+        messagebox.showinfo("Removed",
+            f"Removed: {removed_habitat}\nUnits removed: {removed_units:.3f}\n"
+            f"Plot code: {item_values[0] if item_values else 'N/A'}")
+
+    def _clear_hedge_list(self):
+        """Clear all saved hedgerow calculations after confirmation."""
+        if self.hedge_items and messagebox.askyesno("Clear All", "Clear all saved hedgerow calculations?"):
+            self.hedge_items = []
+            self.hedge_total = 0.0
+            self._refresh_hedge_tree()
+
+    def _save_hedge_selection(self):
+        """Export either the current hedgerow scenario or all saved hedgerow scenarios to CSV."""
+        if not self.hedge_items:
+            messagebox.showwarning("No data", "Add calculations using 'Add to List' first."); return
+        choice = messagebox.askyesno("Save Options",
+            "Save ALL hedgerow calculations in the list?\n\nYes = Save all\nNo = Save only current calculation")
+        if choice:
+            self._save_all_hedge_items()
+        else:
+            self._save_single_hedge_item()
+
+    def _save_single_hedge_item(self):
+        """Save the currently calculated hedgerow scenario as a CSV row."""
+        self._calculate_hedge()
+        txt = self.hedge_result.cget("text")
+        if "Biodiversity Units:" not in txt:
+            messagebox.showerror("No result", "Calculate before saving."); return
+        row = {
+            "Timestamp":            time.strftime("%Y-%m-%d %H:%M:%S"),
+            "Module":               "Hedgerow",
+            "Plot code":            self.var_hedge_code.get(),
+            "Broad Habitat":        "Hedgerows",
+            "Specific Habitat":     self.var_hedge_type.get(),
+            "Distinctiveness":      self.lbl_hedge_distinct.cget("text").split(":")[1].strip(),
+            "Years":                self.var_hedge_year.get(),
+            "Year Multiplier":      self.lbl_hedge_yearmult.cget("text").split(":")[1].strip(),
+            "Condition":            self.var_hedge_condition.get(),
+            "Condition Score":      self.lbl_hedge_cond.cget("text").split(":")[1].strip(),
+            "Difficulty":           "Low (fixed)",
+            "Difficulty Score":     str(HEDGE_DIFFICULTY_SCORE),
+            "Spatial Risk":         self.var_hedge_spatial.get(),
+            "Spatial Multiplier":   self.lbl_hedge_spat.cget("text").split(":")[1].strip(),
+            "Strategic Significance": self.var_hedge_strategic.get(),
+            "Strategic multiplier": self.lbl_hedge_strat.cget("text").split(":")[1].strip(),
+            "Area (ha)":            "",
+            "Length (km)":          self.var_hedge_length.get(),
+            "Biodiversity Units":   txt.split(":")[1].strip(),
+        }
+        default_name = f"hedge_selection_{time.strftime('%Y%m%d_%H%M%S')}.csv"
+        savepath = filedialog.asksaveasfilename(
+            initialfile=default_name, defaultextension=".csv", filetypes=[("CSV", "*.csv")])
+        target = savepath if savepath else str(BASE_DIR / default_name)
+        try:
+            with open(target, "w", newline="", encoding="utf-8") as f:
+                writer = csv.DictWriter(f, fieldnames=list(row.keys()))
+                writer.writeheader(); writer.writerow(row)
+            messagebox.showinfo("Saved", f"Saved to: {target}")
+        except Exception as e:
+            messagebox.showerror("Save error", str(e)); return
+        self.saved_rows.append(row)
+        self._refresh_saved_table()
+
+    def _save_all_hedge_items(self):
+        """Save all hedgerow scenarios currently stored in memory to a CSV file."""
+        if not self.hedge_items:
+            return
+        savepath = filedialog.asksaveasfilename(defaultextension=".csv",
+            filetypes=[("CSV", "*.csv")],
+            initialfile=f"hedge_calculations_{time.strftime('%Y%m%d_%H%M%S')}.csv")
+        if not savepath:
+            return
+        fieldnames = ["Timestamp", "Module", "Plot code", "Broad Habitat", "Specific Habitat", "Distinctiveness",
+                      "Years", "Year Multiplier", "Condition", "Condition Score",
+                      "Difficulty", "Difficulty Score", "Spatial Risk", "Spatial Multiplier",
+                      "Strategic Significance", "Strategic multiplier", "Area (ha)", "Length (km)", "Biodiversity Units"]
+        try:
+            with open(savepath, "w", newline="", encoding="utf-8") as f:
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer.writeheader()
+                for item in self.hedge_items:
+                    row = {
+                        "Timestamp":              time.strftime("%Y-%m-%d %H:%M:%S"),
+                        "Module":                 "Hedgerow",
+                        "Plot code":              item.get("plot_code", ""),
+                        "Broad Habitat":          "Hedgerows",
+                        "Specific Habitat":       item.get("hedge_type", ""),
+                        "Distinctiveness":        item.get("distinctiveness", ""),
+                        "Years":                  item.get("years", ""),
+                        "Year Multiplier":        item.get("year_multiplier", ""),
+                        "Condition":              item.get("condition", ""),
+                        "Condition Score":        item.get("condition_score", ""),
+                        "Difficulty":             "Low (fixed)",
+                        "Difficulty Score":       item.get("difficulty_score", ""),
+                        "Spatial Risk":           item.get("spatial", ""),
+                        "Spatial Multiplier":     item.get("spatial_multiplier", ""),
+                        "Strategic Significance": item.get("strategic", ""),
+                        "Strategic multiplier":   item.get("strategic_multiplier", ""),
+                        "Area (ha)":              "",
+                        "Length (km)":            item.get("length", ""),
+                        "Biodiversity Units":     item.get("units", 0),
+                    }
+                    writer.writerow(row)
+                    self.saved_rows.append(row)
+            messagebox.showinfo("Saved", f"All {len(self.hedge_items)} calculations saved to:\n{savepath}")
+            self._refresh_saved_table()
+        except Exception as e:
+            messagebox.showerror("Save error", str(e))
+
+
     def _build_baseline_tab(self):
         """Create the baseline comparison tab for parcel-level biodiversity scoring."""
         outer  = ttk.Frame(self.tab_baseline)
@@ -2208,6 +2646,7 @@ class BiodiversityApp:
             messagebox.showerror("No result", "Calculate before saving."); return
         row = {
             "Timestamp":            time.strftime("%Y-%m-%d %H:%M:%S"),
+            "Module":               "Area Habitat",
             "Plot code":            self.var_code.get(),
             "Broad Habitat":        self.var_broad.get(),
             "Specific Habitat":     self.var_specific.get(),
@@ -2223,6 +2662,7 @@ class BiodiversityApp:
             "Strategic Significance": self.var_strategic.get(),
             "Strategic multiplier": self.lbl_strat.cget("text").split(":")[1].strip(),
             "Area (ha)":            self.var_area.get(),
+            "Length (km)":          "",
             "Biodiversity Units":   txt.split(":")[1].strip(),
         }
         default_name = f"gain_selection_{time.strftime('%Y%m%d_%H%M%S')}.csv"
@@ -2248,10 +2688,10 @@ class BiodiversityApp:
             initialfile=f"gain_calculations_{time.strftime('%Y%m%d_%H%M%S')}.csv")
         if not savepath:
             return
-        fieldnames = ["Timestamp", "Plot code", "Broad Habitat", "Specific Habitat", "Distinctiveness",
+        fieldnames = ["Timestamp", "Module", "Plot code", "Broad Habitat", "Specific Habitat", "Distinctiveness",
                       "Years", "Year Multiplier", "Condition", "Condition Score",
                       "Difficulty", "Difficulty Score", "Spatial Risk", "Spatial Multiplier",
-                      "Strategic Significance", "Strategic multiplier", "Area (ha)", "Biodiversity Units"]
+                      "Strategic Significance", "Strategic multiplier", "Area (ha)", "Length (km)", "Biodiversity Units"]
         try:
             with open(savepath, "w", newline="", encoding="utf-8") as f:
                 writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -2259,6 +2699,7 @@ class BiodiversityApp:
                 for item in self.gain_items:
                     row = {
                         "Timestamp":              time.strftime("%Y-%m-%d %H:%M:%S"),
+                        "Module":                 "Area Habitat",
                         "Plot code":              item.get("plot_code", ""),
                         "Broad Habitat":          item.get("broad", ""),
                         "Specific Habitat":       item.get("specific", ""),
@@ -2274,6 +2715,7 @@ class BiodiversityApp:
                         "Strategic Significance": item.get("strategic", ""),
                         "Strategic multiplier":   item.get("strategic_multiplier", ""),
                         "Area (ha)":              item.get("area", ""),
+                        "Length (km)":            "",
                         "Biodiversity Units":     item.get("units", 0),
                     }
                     writer.writerow(row)
@@ -2288,9 +2730,9 @@ class BiodiversityApp:
         """Create the saved-results tab for browsing and exporting previous runs."""
         card = ttk.Frame(self.tab_saved, padding=12)
         card.pack(fill="both", expand=True, padx=10, pady=8)
-        cols = ["Timestamp", "Plot code", "Broad Habitat", "Specific Habitat", "Distinctiveness",
+        cols = ["Timestamp", "Module", "Plot code", "Broad Habitat", "Specific Habitat", "Distinctiveness",
                 "Years", "Condition", "Spatial Risk", "Strategic Significance", "Difficulty",
-                "Area (ha)", "Biodiversity Units"]
+                "Area (ha)", "Length (km)", "Biodiversity Units"]
         self.saved_tree = ttk.Treeview(card, columns=cols, show="headings", height=14)
         for c in cols:
             self.saved_tree.heading(c, text=c)
@@ -2307,10 +2749,10 @@ class BiodiversityApp:
             self.saved_tree.delete(i)
         for row in self.saved_rows:
             self.saved_tree.insert("", "end", values=(
-                row.get("Timestamp"), row.get("Plot code"), row.get("Broad Habitat"),
+                row.get("Timestamp"), row.get("Module", "Area Habitat"), row.get("Plot code"), row.get("Broad Habitat"),
                 row.get("Specific Habitat"), row.get("Distinctiveness"), row.get("Years"),
                 row.get("Condition"), row.get("Spatial Risk"), row.get("Strategic Significance"),
-                row.get("Difficulty"), row.get("Area (ha)"), row.get("Biodiversity Units")))
+                row.get("Difficulty"), row.get("Area (ha)"), row.get("Length (km)", ""), row.get("Biodiversity Units")))
 
     def _export_saved_all(self):
         """Export all saved calculation rows to a CSV file selected by the user."""
