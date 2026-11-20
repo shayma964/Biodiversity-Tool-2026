@@ -119,6 +119,11 @@ def classify_tree_dbh(dbh_cm):
             return name, area
     return None, None
 
+# Broad Habitat Type value that triggers the DBH/count popup instead of a
+# plain Area (ha) entry. Must match the "Broad Habitat Type" value used for
+# the Individual trees rows in all_habitats.csv exactly (case-sensitive).
+TREES_BROAD_HABITAT = "Individual trees"
+
                                                                              
 COL_BROAD     = "Baseline Broad Habitat Type"
 COL_CONDITION = "Baseline Condition"
@@ -1783,8 +1788,16 @@ class BiodiversityApp:
         row_st = add_row("Strategic significance:",
             "High: Important for achieving goals of biodiversity plan = 1.15.  Low: 1.0", ent_strategic)
 
-        ent_area = ttk.Entry(frm, textvariable=self.var_area, width=18)
-        row_a = add_row("Area (ha):", "Enter parcel area in hectares (e.g., 2.5).", ent_area)
+        area_widget_frame = ttk.Frame(frm)
+        self.ent_area = ttk.Entry(area_widget_frame, textvariable=self.var_area, width=18)
+        self.ent_area.pack(side="left")
+        self.btn_tree_details = ttk.Button(area_widget_frame, text="🌳 Tree details...",
+            command=self._open_tree_popup, state="disabled")
+        self.btn_tree_details.pack(side="left", padx=(6, 0))
+        row_a = add_row("Area (ha):",
+            "Enter parcel area in hectares (e.g., 2.5). For 'Individual trees', "
+            "pick that broad habitat to enter tree DBH and counts instead.",
+            area_widget_frame)
 
         self.lbl_code     = ttk.Label(frm, text="Plot code: -");         self.lbl_code.grid(row=row_p,  column=3, sticky="w", padx=6)
         self.lbl_distinct = ttk.Label(frm, text="Distinctiveness: -");   self.lbl_distinct.grid(row=row_s, column=3, sticky="w", padx=6)
@@ -2134,6 +2147,7 @@ class BiodiversityApp:
             "Strategic multiplier": self.lbl_hedge_strat.cget("text").split(":")[1].strip(),
             "Area (ha)":            "",
             "Length (km)":          self.var_hedge_length.get(),
+            "Tree Details":         "",
             "Biodiversity Units":   txt.split(":")[1].strip(),
         }
         default_name = f"hedge_selection_{time.strftime('%Y%m%d_%H%M%S')}.csv"
@@ -2162,7 +2176,8 @@ class BiodiversityApp:
         fieldnames = ["Timestamp", "Module", "Plot code", "Broad Habitat", "Specific Habitat", "Distinctiveness",
                       "Years", "Year Multiplier", "Condition", "Condition Score",
                       "Difficulty", "Difficulty Score", "Spatial Risk", "Spatial Multiplier",
-                      "Strategic Significance", "Strategic multiplier", "Area (ha)", "Length (km)", "Biodiversity Units"]
+                      "Strategic Significance", "Strategic multiplier", "Area (ha)", "Length (km)",
+                      "Tree Details", "Biodiversity Units"]
         try:
             with open(savepath, "w", newline="", encoding="utf-8") as f:
                 writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -2187,6 +2202,7 @@ class BiodiversityApp:
                         "Strategic multiplier":   item.get("strategic_multiplier", ""),
                         "Area (ha)":              "",
                         "Length (km)":            item.get("length", ""),
+                        "Tree Details":           "",
                         "Biodiversity Units":     item.get("units", 0),
                     }
                     writer.writerow(row)
@@ -2472,12 +2488,22 @@ class BiodiversityApp:
                    ["Specific Habitat"].dropna().unique().tolist())
         cb_specific.set_completion_list(related)
         self.var_specific.set("")
-                                                                             
+
         if b and related:
             self.lbl_distinct.config(text=f"Distinctiveness: ({len(related)} habitats available)")
         else:
             self.lbl_distinct.config(text="Distinctiveness: -")
         self.gain_result.config(text="Biodiversity Units: -")
+
+        if b == TREES_BROAD_HABITAT:
+            self.btn_tree_details.config(state="normal")
+            self.ent_area.config(state="readonly")
+            self._open_tree_popup()
+        else:
+            self.btn_tree_details.config(state="disabled")
+            self.ent_area.config(state="normal")
+            self.tree_rows = []
+            self.tree_popup_active = False
 
     def _on_specific_change(self):
         """Display the distinctiveness score for the currently selected habitat."""
@@ -2518,6 +2544,128 @@ class BiodiversityApp:
         """Refresh the displayed area value when the user edits the field."""
         self.lbl_area.config(text=f"Area: {self.var_area.get()}")
         self.gain_result.config(text="Biodiversity Units: -")
+
+    def _open_tree_popup(self):
+        """Open a dialog to enter individual trees as (DBH, count) rows.
+
+        Each row is classified into a metric size class (Small/Medium/Large/
+        Very large) and converted to a notional area equivalent in hectares.
+        Applying the dialog sums these into a total area that fills and
+        locks the Area (ha) field, so individual trees are compensated for
+        using the same area-based formula as any other habitat.
+        """
+        popup = tk.Toplevel(self.root)
+        popup.title("Individual Trees — DBH & Count")
+        popup.transient(self.root)
+        popup.grab_set()
+
+        info = ttk.Label(popup, padx=10, pady=8, justify="left", text=(
+            "Enter each distinct tree size on its own row: its diameter at breast height (DBH)\n"
+            "in cm, and how many trees of that size. Trees with DBH ≤ 7.5 cm do not qualify\n"
+            "under the metric's tree helper and will be ignored."))
+        info.pack(fill="x")
+
+        columns = ("DBH (cm)", "Count", "Size class", "Area/tree (ha)", "Row area (ha)")
+        tv = ttk.Treeview(popup, columns=columns, show="headings", height=8)
+        for c in columns:
+            tv.heading(c, text=c)
+            tv.column(c, width=110, anchor="center")
+        tv.pack(fill="both", expand=True, padx=10, pady=(0, 6))
+
+        total_label = ttk.Label(popup, text="Total area: 0.0000 ha", font=("Segoe UI", 10, "bold"))
+        total_label.pack(anchor="w", padx=10)
+
+        def refresh_tree():
+            for i in tv.get_children():
+                tv.delete(i)
+            total = 0.0
+            for row in self.tree_rows:
+                row_area = row["count"] * row["area_per_tree"]
+                total += row_area
+                tv.insert("", "end", values=(
+                    f"{row['dbh']:g}", row["count"], row["size_class"],
+                    f"{row['area_per_tree']:.4f}", f"{row_area:.4f}"))
+            total_label.config(text=f"Total area: {total:.4f} ha")
+            return total
+
+        entry_frame = ttk.Frame(popup)
+        entry_frame.pack(fill="x", padx=10, pady=6)
+        ttk.Label(entry_frame, text="DBH (cm):").pack(side="left")
+        dbh_var = tk.StringVar()
+        ttk.Entry(entry_frame, textvariable=dbh_var, width=10).pack(side="left", padx=(4, 12))
+        ttk.Label(entry_frame, text="Number of trees:").pack(side="left")
+        count_var = tk.StringVar()
+        ttk.Entry(entry_frame, textvariable=count_var, width=10).pack(side="left", padx=(4, 12))
+
+        def add_row():
+            try:
+                dbh = float(dbh_var.get())
+                count = int(count_var.get())
+            except ValueError:
+                messagebox.showerror("Invalid entry", "DBH and number of trees must be numbers.",
+                    parent=popup)
+                return
+            if count <= 0:
+                messagebox.showerror("Invalid entry", "Number of trees must be greater than 0.",
+                    parent=popup)
+                return
+            size_class, area_per_tree = classify_tree_dbh(dbh)
+            if size_class is None:
+                messagebox.showwarning("Below minimum size",
+                    f"DBH {dbh:g} cm is ≤ 7.5 cm and does not qualify as a tree under the "
+                    f"metric's tree helper. This row will not be added.", parent=popup)
+                return
+            self.tree_rows.append({
+                "dbh": dbh, "count": count,
+                "size_class": size_class, "area_per_tree": area_per_tree,
+            })
+            dbh_var.set(""); count_var.set("")
+            refresh_tree()
+
+        def remove_selected(event=None):
+            sel = tv.selection()
+            if not sel:
+                return
+            idx = tv.index(sel[0])
+            if 0 <= idx < len(self.tree_rows):
+                del self.tree_rows[idx]
+            refresh_tree()
+
+        tv.bind("<Double-1>", remove_selected)
+
+        btns = ttk.Frame(popup)
+        btns.pack(fill="x", padx=10, pady=(0, 10))
+        ttk.Button(btns, text="Add row", command=add_row).pack(side="left")
+        ttk.Label(btns, text="(double-click a row below to remove it)",
+            font=("Segoe UI", 8, "italic"), foreground="#555").pack(side="left", padx=10)
+
+        def apply_and_close():
+            total = refresh_tree()
+            if not self.tree_rows:
+                messagebox.showwarning("No trees entered",
+                    "Add at least one row before applying, or close this window to cancel "
+                    "and pick a different broad habitat.", parent=popup)
+                return
+            self.var_area.set(f"{total:.4f}")
+            self._on_area_change()
+            self.tree_popup_active = True
+            popup.destroy()
+
+        def cancel():
+            if not self.tree_rows:
+                # Nothing entered at all: back out of "Individual trees" entirely.
+                self.var_broad.set("")
+                self.ent_area.config(state="normal")
+                self.btn_tree_details.config(state="disabled")
+            popup.destroy()
+
+        action_btns = ttk.Frame(popup)
+        action_btns.pack(fill="x", padx=10, pady=(0, 10))
+        ttk.Button(action_btns, text="Apply", command=apply_and_close).pack(side="right", padx=(6, 0))
+        ttk.Button(action_btns, text="Cancel", command=cancel).pack(side="right")
+
+        refresh_tree()
+        popup.protocol("WM_DELETE_WINDOW", cancel)
 
     def _calculate_gain(self):
         """Calculate biodiversity gain units from the selected habitat and parameters."""
@@ -2560,6 +2708,10 @@ class BiodiversityApp:
         units = float(result_text.split(":")[1].strip())
         broad = self.var_broad.get().strip()
         specific = self.var_specific.get()
+        tree_details = ""
+        if broad == TREES_BROAD_HABITAT and self.tree_popup_active and self.tree_rows:
+            tree_details = "; ".join(
+                f"{r['count']}x DBH {r['dbh']:g}cm ({r['size_class']})" for r in self.tree_rows)
         item = {
             "plot_code":          self.var_code.get().strip(),
             "habitat":            f"{broad} - {specific}" if broad and specific else "Unknown Habitat",
@@ -2578,6 +2730,7 @@ class BiodiversityApp:
             "spatial_multiplier": self.lbl_spat.cget("text").split(":")[1].strip(),
             "strategic_multiplier": self.lbl_strat.cget("text").split(":")[1].strip(),
             "year_multiplier":    self.lbl_yearmult.cget("text").split(":")[1].strip(),
+            "tree_details":       tree_details,
         }
         self.gain_items.append(item)
         self.gain_total += units
@@ -2663,6 +2816,10 @@ class BiodiversityApp:
             "Strategic multiplier": self.lbl_strat.cget("text").split(":")[1].strip(),
             "Area (ha)":            self.var_area.get(),
             "Length (km)":          "",
+            "Tree Details":         ("; ".join(f"{r['count']}x DBH {r['dbh']:g}cm ({r['size_class']})"
+                                      for r in self.tree_rows)
+                                      if self.var_broad.get().strip() == TREES_BROAD_HABITAT
+                                      and self.tree_popup_active and self.tree_rows else ""),
             "Biodiversity Units":   txt.split(":")[1].strip(),
         }
         default_name = f"gain_selection_{time.strftime('%Y%m%d_%H%M%S')}.csv"
@@ -2691,7 +2848,8 @@ class BiodiversityApp:
         fieldnames = ["Timestamp", "Module", "Plot code", "Broad Habitat", "Specific Habitat", "Distinctiveness",
                       "Years", "Year Multiplier", "Condition", "Condition Score",
                       "Difficulty", "Difficulty Score", "Spatial Risk", "Spatial Multiplier",
-                      "Strategic Significance", "Strategic multiplier", "Area (ha)", "Length (km)", "Biodiversity Units"]
+                      "Strategic Significance", "Strategic multiplier", "Area (ha)", "Length (km)",
+                      "Tree Details", "Biodiversity Units"]
         try:
             with open(savepath, "w", newline="", encoding="utf-8") as f:
                 writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -2716,6 +2874,7 @@ class BiodiversityApp:
                         "Strategic multiplier":   item.get("strategic_multiplier", ""),
                         "Area (ha)":              item.get("area", ""),
                         "Length (km)":            "",
+                        "Tree Details":           item.get("tree_details", ""),
                         "Biodiversity Units":     item.get("units", 0),
                     }
                     writer.writerow(row)
@@ -2732,7 +2891,7 @@ class BiodiversityApp:
         card.pack(fill="both", expand=True, padx=10, pady=8)
         cols = ["Timestamp", "Module", "Plot code", "Broad Habitat", "Specific Habitat", "Distinctiveness",
                 "Years", "Condition", "Spatial Risk", "Strategic Significance", "Difficulty",
-                "Area (ha)", "Length (km)", "Biodiversity Units"]
+                "Area (ha)", "Length (km)", "Tree Details", "Biodiversity Units"]
         self.saved_tree = ttk.Treeview(card, columns=cols, show="headings", height=14)
         for c in cols:
             self.saved_tree.heading(c, text=c)
@@ -2752,7 +2911,8 @@ class BiodiversityApp:
                 row.get("Timestamp"), row.get("Module", "Area Habitat"), row.get("Plot code"), row.get("Broad Habitat"),
                 row.get("Specific Habitat"), row.get("Distinctiveness"), row.get("Years"),
                 row.get("Condition"), row.get("Spatial Risk"), row.get("Strategic Significance"),
-                row.get("Difficulty"), row.get("Area (ha)"), row.get("Length (km)", ""), row.get("Biodiversity Units")))
+                row.get("Difficulty"), row.get("Area (ha)"), row.get("Length (km)", ""),
+                row.get("Tree Details", ""), row.get("Biodiversity Units")))
 
     def _export_saved_all(self):
         """Export all saved calculation rows to a CSV file selected by the user."""
