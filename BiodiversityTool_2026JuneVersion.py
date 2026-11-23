@@ -712,6 +712,10 @@ class BiodiversityApp:
         style.configure("TLabel",        background=MAIN_BG, foreground="#016c59")
         style.configure("TButton",       background="#1c9099", foreground="#f1eef6", padding=6)
         style.map("TButton",             background=[("active", "#016c59")])
+        style.configure("TreeDetails.TButton", background="#2E7D32", foreground="white", padding=6)
+        style.map("TreeDetails.TButton",
+            background=[("disabled", "#9E9E9E"), ("active", "#1B5E20"), ("!disabled", "#2E7D32")],
+            foreground=[("disabled", "#424242"), ("!disabled", "white")])
         style.configure("TCombobox",     fieldbackground=MAIN_BG, background=MAIN_BG, foreground="#016c59")
 
         ico_try = LOGOS_DIR / "biodiversity.ico"
@@ -1799,10 +1803,10 @@ class BiodiversityApp:
         self.ent_area = ttk.Entry(area_widget_frame, textvariable=self.var_area, width=18)
         self.ent_area.pack(side="left")
         self.btn_tree_details = ttk.Button(area_widget_frame, text="🌳 Tree details...",
-            command=self._open_tree_popup, state="disabled")
+            command=self._open_tree_popup, state="disabled", style="TreeDetails.TButton")
         self.btn_tree_details.pack(side="left", padx=(6, 0))
         row_a = add_row("Area (ha):",
-            "Enter parcel area in hectares (e.g., 2.5). For 'Individual trees', "
+            f"Enter parcel area in hectares (e.g., 2.5). For '{TREES_BROAD_HABITAT}', "
             "pick that broad habitat to enter tree DBH and counts instead.",
             area_widget_frame)
 
