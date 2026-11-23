@@ -1853,7 +1853,7 @@ class BiodiversityApp:
         cb_difficulty.bind("<<ComboboxSelected>>",lambda e: self._on_difficulty_change())
         cb_spatial.bind("<<ComboboxSelected>>", lambda e: self._on_spatial_change())
         ent_strategic.bind("<<ComboboxSelected>>",lambda e: self._on_strategic_change())
-        ent_area.bind("<KeyRelease>",           lambda e: self._on_area_change())
+        self.ent_area.bind("<KeyRelease>",      lambda e: self._on_area_change())
 
     def _build_hedge_gain_tab(self, parent):
         """Create the hedgerow gain-calculation inputs (length-based, separate from area habitats)."""
