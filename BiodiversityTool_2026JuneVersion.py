@@ -2509,7 +2509,10 @@ class BiodiversityApp:
         if _is_trees_broad_habitat(b):
             self.btn_tree_details.config(state="normal")
             self.ent_area.config(state="readonly")
-            self._open_tree_popup()
+            # Defer rather than opening synchronously: opening a grab_set()
+            # dialog from inside the combobox's own selection event can
+            # otherwise render it blank until the user interacts with it.
+            self.root.after(50, self._open_tree_popup)
         else:
             self.btn_tree_details.config(state="disabled")
             self.ent_area.config(state="normal")
@@ -2566,9 +2569,8 @@ class BiodiversityApp:
         using the same area-based formula as any other habitat.
         """
         popup = tk.Toplevel(self.root)
-        popup.title("Individual Trees — DBH & Count")
+        popup.title("Individual Trees: DBH & Count")
         popup.transient(self.root)
-        popup.grab_set()
 
         info = ttk.Label(popup, padx=10, pady=8, justify="left", text=(
             "Enter each distinct tree size on its own row: its diameter at breast height (DBH)\n"
@@ -2677,6 +2679,14 @@ class BiodiversityApp:
 
         refresh_tree()
         popup.protocol("WM_DELETE_WINDOW", cancel)
+
+        # Force the window to lay out and paint its widgets before grabbing
+        # input focus. Calling grab_set() immediately (especially when this
+        # dialog is opened synchronously from inside a Combobox selection
+        # event) can leave the window visually blank on Windows until it is
+        # resized or moved, because the widgets haven't been drawn yet.
+        popup.update_idletasks()
+        popup.grab_set()
 
     def _calculate_gain(self):
         """Calculate biodiversity gain units from the selected habitat and parameters."""
