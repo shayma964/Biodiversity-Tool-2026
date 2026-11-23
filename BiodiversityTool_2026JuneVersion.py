@@ -121,8 +121,15 @@ def classify_tree_dbh(dbh_cm):
 
 # Broad Habitat Type value that triggers the DBH/count popup instead of a
 # plain Area (ha) entry. Must match the "Broad Habitat Type" value used for
-# the Individual trees rows in all_habitats.csv exactly (case-sensitive).
-TREES_BROAD_HABITAT = "Individual trees"
+# the individual-trees rows in all_habitats.csv (set to your CSV's actual
+# wording, e.g. a translated label). The comparison below is case- and
+# whitespace-insensitive, so exact capitalisation in the CSV doesn't matter.
+TREES_BROAD_HABITAT = "Solitaire bomen"
+
+
+def _is_trees_broad_habitat(value):
+    """Return True if `value` matches TREES_BROAD_HABITAT, ignoring case/whitespace."""
+    return str(value).strip().casefold() == TREES_BROAD_HABITAT.strip().casefold()
 
                                                                              
 COL_BROAD     = "Baseline Broad Habitat Type"
@@ -2495,7 +2502,7 @@ class BiodiversityApp:
             self.lbl_distinct.config(text="Distinctiveness: -")
         self.gain_result.config(text="Biodiversity Units: -")
 
-        if b == TREES_BROAD_HABITAT:
+        if _is_trees_broad_habitat(b):
             self.btn_tree_details.config(state="normal")
             self.ent_area.config(state="readonly")
             self._open_tree_popup()
@@ -2709,7 +2716,7 @@ class BiodiversityApp:
         broad = self.var_broad.get().strip()
         specific = self.var_specific.get()
         tree_details = ""
-        if broad == TREES_BROAD_HABITAT and self.tree_popup_active and self.tree_rows:
+        if _is_trees_broad_habitat(broad) and self.tree_popup_active and self.tree_rows:
             tree_details = "; ".join(
                 f"{r['count']}x DBH {r['dbh']:g}cm ({r['size_class']})" for r in self.tree_rows)
         item = {
@@ -2818,7 +2825,7 @@ class BiodiversityApp:
             "Length (km)":          "",
             "Tree Details":         ("; ".join(f"{r['count']}x DBH {r['dbh']:g}cm ({r['size_class']})"
                                       for r in self.tree_rows)
-                                      if self.var_broad.get().strip() == TREES_BROAD_HABITAT
+                                      if _is_trees_broad_habitat(self.var_broad.get())
                                       and self.tree_popup_active and self.tree_rows else ""),
             "Biodiversity Units":   txt.split(":")[1].strip(),
         }
