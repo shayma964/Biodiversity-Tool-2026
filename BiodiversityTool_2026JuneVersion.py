@@ -2572,11 +2572,11 @@ class BiodiversityApp:
         popup.title("Individual Trees: DBH & Count")
         popup.transient(self.root)
 
-        info = ttk.Label(popup, padx=10, pady=8, justify="left", text=(
+        info = ttk.Label(popup, justify="left", text=(
             "Enter each distinct tree size on its own row: its diameter at breast height (DBH)\n"
             "in cm, and how many trees of that size. Trees with DBH ≤ 7.5 cm do not qualify\n"
             "under the metric's tree helper and will be ignored."))
-        info.pack(fill="x")
+        info.pack(fill="x", padx=10, pady=8)
 
         columns = ("DBH (cm)", "Count", "Size class", "Area/tree (ha)", "Row area (ha)")
         tv = ttk.Treeview(popup, columns=columns, show="headings", height=8)
